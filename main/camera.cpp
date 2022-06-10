@@ -66,7 +66,10 @@ esp_err_t camera_init(){
     camera_config.pin_href = CAM_PIN_HREF;
     camera_config.pin_pclk = CAM_PIN_PCLK;
 
-    camera_config.xclk_freq_hz = 20000000,//EXPERIMENTAL: Set to 16MHz on ESP32-S2 or ESP32-S3 to enable EDMA mode
+    // This: https://github.com/espressif/arduino-esp32/issues/5834
+    // Suggested changing this improved wifi performance - 18Mhz appears to work so not sure what the constraints on values are
+    // but this is much better for me
+    camera_config.xclk_freq_hz = 18000000;//EXPERIMENTAL: Set to 16MHz on ESP32-S2 or ESP32-S3 to enable EDMA mode
     camera_config.ledc_timer = LEDC_TIMER_0;
     camera_config.ledc_channel = LEDC_CHANNEL_0;
 
@@ -95,20 +98,3 @@ esp_err_t camera_init(){
 
     return ESP_OK;
 }
-
-#if 0
-esp_err_t camera_capture(){
-    //acquire a frame
-    camera_fb_t * fb = esp_camera_fb_get();
-    if (!fb) {
-        ESP_LOGE(TAG, "Camera Capture Failed");
-        return ESP_FAIL;
-    }
-    //replace this with your own function
-    process_image(fb->width, fb->height, fb->format, fb->buf, fb->len);
-  
-    //return the frame buffer back to the driver for reuse
-    esp_camera_fb_return(fb);
-    return ESP_OK;
-}
-#endif

@@ -7,9 +7,9 @@ const char *index_page = R"!(<html>
         <script>
             function snap()
             {
-                window.stop();
                 if (imagepanel.innerHTML != '')
                 {   
+                    image.src="";
                     image.src="/still";
                 }
                 else
@@ -19,7 +19,6 @@ const char *index_page = R"!(<html>
             }
             function stream()
             {
-                window.stop();
                 if (imagepanel.innerHTML != '')
                 {   
                     image.src="/stream";
@@ -31,13 +30,11 @@ const char *index_page = R"!(<html>
             }
             function restart()
             {
-                window.stop();
                 imagepanel.innerHTML='Restarting';
                 window.location.href = '/restart';
             }
             function vflip()
             {
-                window.stop();
                 var xhr = new XMLHttpRequest();
                 xhr.open("GET", "/config?vflip=2");
                 xhr.send();
@@ -48,7 +45,6 @@ const char *index_page = R"!(<html>
             }
             function hflip()
             {
-                window.stop();
                 var xhr = new XMLHttpRequest();
                 xhr.open("GET", "/config?hflip=2");
                 xhr.send();
@@ -59,29 +55,24 @@ const char *index_page = R"!(<html>
             }
         </script>
         <style>
-        #imagepanel {
-            display: grid;
-            height: 100%;
-        }
-        .center {
-            max-width: 100%;
-            max-height: 100vh;
-            margin: auto;
-        }
+        #imagepanel { display: grid; height: 100%; }
+        .center { max-width: 100%; max-height: 100vh; margin: auto; }
+        button { border: 0; border-radius: 0.3rem; background:#1fa3ec; color:#ffffff; line-height:2.4rem; font-size:1.2rem; width:160px;
+        -webkit-transition-duration:0.4s;transition-duration:0.4s;cursor:pointer;}
+        button:hover{background:#0b73aa;}
         </style>
 	</head>
 	<body>
 		<h1>ESP32 Camera</h1>
-        <ul>
-            <li><a href="stream">Stream</a></li>
-            <li><button onclick="snap()">Still</button></li>
-            <li><button onclick="stream()">Stream</button></li>
-            <li><button onclick="vflip()">VFlip</button></li>
-            <li><button onclick="hflip()">HFlip</button></li>
-            <li><a href="/status">Status</a></li>
-            <li><a href="/update">Firmware update</a></li>
-            <li><button onclick="restart()">Restart</button></li>
-        </ul>
+        <table><tr>
+            <td><button onclick="snap()">Still</button></td>
+            <td><button onclick="stream()">Stream</button></td>
+            <td><button onclick="vflip()">VFlip</button></td>
+            <td><button onclick="hflip()">HFlip</button></td>
+            <td><a href="/status"><button type="button">Status</button></a></td>
+            <td><a href="/update"><button type="button">Update</button></a></td>
+            <td><button onclick="restart()">Restart</button></td>
+        </tr></table>
         <div id="imagepanel"></div>
 	</body>
 </html>)!";

@@ -33,12 +33,14 @@
 
 #define TAG "camera"
 #define PART_BOUNDARY "123456789000000000000987654321"
-static const char* _STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
+
+#define _STREAM_CONTENT_TYPE "multipart/x-mixed-replace;boundary=" PART_BOUNDARY
+
 static const char* _STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
 static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
-static esp_err_t jpg_stream_httpd_handler(httpd_req_t *req);
-static esp_err_t jpg_httpd_handler(httpd_req_t *req);
+static esp_err_t stream_handler(httpd_req_t *req);
+static esp_err_t still_handler(httpd_req_t *req);
 
 static char page_buf[1024];
 static int buf_offset;
@@ -155,12 +157,14 @@ static void print_chip_info(int (*printfn)(const char *format, ...))
 
 static esp_err_t status_handler(httpd_req_t *req)
 {
+    ESP_LOGI(TAG, "status req: %p", * (void **)req->aux);
     buf_offset = 0;
     print_chip_info(buf_printf);
     esp_err_t res = httpd_resp_set_type(req, "text/html");
     if(res != ESP_OK){
         return res;
     }
+    res = httpd_resp_set_hdr(req, "Connection", "close");
 	return httpd_resp_send(req, page_buf, buf_offset);
 }
 
@@ -188,6 +192,12 @@ static esp_err_t log_handler(httpd_req_t *req)
 
 static esp_err_t config_handler(httpd_req_t *req)
 {
+    auto res = httpd_resp_set_hdr(req, "Connection", "close");
+    if (res != ESP_OK)
+    {
+        return res;
+    }
+
     size_t buf_len = httpd_req_get_url_query_len(req) + 1;
     if (buf_len > 1) 
     {
@@ -252,6 +262,7 @@ static esp_err_t update_handler(httpd_req_t *req)
     if(res != ESP_OK){
         return res;
     }
+    res = httpd_resp_set_hdr(req, "Connection", "close");
 	return httpd_resp_send(req, update_page, strlen(update_page));
 }
 
@@ -261,6 +272,7 @@ static esp_err_t index_handler(httpd_req_t *req)
     if(res != ESP_OK){
         return res;
     }
+    res = httpd_resp_set_hdr(req, "Connection", "close");
 	return httpd_resp_send(req, index_page, strlen(index_page));
 }
 
@@ -280,6 +292,7 @@ static httpd_handle_t start_webserver(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.max_uri_handlers = 32;
+    config.core_id = 0;
 
     // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
@@ -301,13 +314,13 @@ static httpd_handle_t start_webserver(void)
         httpd_uri_t stream{};
         stream.uri       = "/stream";
         stream.method    = HTTP_GET;
-        stream.handler   = jpg_stream_httpd_handler;
+        stream.handler   = stream_handler;
         httpd_register_uri_handler(server, &stream);
 
         httpd_uri_t still{};
         still.uri       = "/still";
         still.method    = HTTP_GET,
-        still.handler   = jpg_httpd_handler,
+        still.handler   = still_handler,
         httpd_register_uri_handler(server, &still);
 
         httpd_uri_t update{};
@@ -392,17 +405,28 @@ extern "C" void app_main(void)
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "pool.ntp.org");
     sntp_init();
-    sntp_set_time_sync_notification_cb([](timeval *) { ESP_LOGI(TAG, "Time synchronized");});
+    sntp_set_time_sync_notification_cb([](timeval *tv)
+        { 
+            struct tm t;
+            localtime_r(&tv->tv_sec, &t);
+            char buf[32];
+            ESP_LOGI(TAG, "Time synchronized %s", asctime_r(&t, buf));
+
+        });
+
+    //int ret = xTaskCreatePinnedToCore(thread_routine, name, stacksize, arg, prio, thread, core_id);
 
     start_webserver();
 }
 
-typedef struct {
-        httpd_req_t *req;
-        size_t len;
+typedef struct
+{
+    httpd_req_t *req;
+    size_t len;
 } jpg_chunking_t;
 
-static size_t jpg_encode_stream(void * arg, size_t index, const void* data, size_t len){
+static size_t jpg_encode_stream(void * arg, size_t index, const void* data, size_t len)
+{
     jpg_chunking_t *j = (jpg_chunking_t *)arg;
     if(!index){
         j->len = 0;
@@ -414,114 +438,204 @@ static size_t jpg_encode_stream(void * arg, size_t index, const void* data, size
     return len;
 }
 
-static esp_err_t jpg_httpd_handler(httpd_req_t *req)
+static esp_err_t still_handler(httpd_req_t *req)
 {
-    camera_fb_t * fb = NULL;
-    esp_err_t res = ESP_OK;
-    size_t fb_len = 0;
+    ESP_LOGI(TAG, "still_httpd req: %d", httpd_req_to_sockfd(req));
     int64_t fr_start = esp_timer_get_time();
 
-    fb = esp_camera_fb_get();
-    if (!fb) {
+    camera_fb_t * fb = esp_camera_fb_get();
+    if (fb == nullptr) 
+    {
         ESP_LOGE(TAG, "Camera capture failed");
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
-    res = httpd_resp_set_type(req, "image/jpeg");
-    if(res == ESP_OK){
+
+    auto res = httpd_resp_set_type(req, "image/jpeg");
+    if(res == ESP_OK)
+    {
         res = httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
     }
-    if(res == ESP_OK){
+    if(res == ESP_OK)
+    {
         res = httpd_resp_set_hdr(req, "Cache-control", "no-cache");
     }
+    res = httpd_resp_set_hdr(req, "Connection", "close");
 
-    if(res == ESP_OK){
-        if(fb->format == PIXFORMAT_JPEG){
+    size_t fb_len = 0;
+    if(res == ESP_OK)
+    {
+        if(fb->format == PIXFORMAT_JPEG)
+        {
             fb_len = fb->len;
             ESP_LOGI(TAG, "jpeg fb %d", fb->len);
             res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
-        } else {
+        }
+        else
+        {
             jpg_chunking_t jchunk = {req, 0};
             res = frame2jpg_cb(fb, 80, jpg_encode_stream, &jchunk)?ESP_OK:ESP_FAIL;
             httpd_resp_send_chunk(req, NULL, 0);
             fb_len = jchunk.len;
         }
     }
+
     esp_camera_fb_return(fb);
     int64_t fr_end = esp_timer_get_time();
     ESP_LOGI(TAG, "JPG: %uKB %ums", (uint32_t)(fb_len/1024), (uint32_t)((fr_end - fr_start)/1000));
     return res;
 }
 
-static esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
-    camera_fb_t * fb = NULL;
-    esp_err_t res = ESP_OK;
+struct async_frame_resp
+{
+    httpd_handle_t hd;
+    int fd;
+    int64_t last_frame_time;
+};
+
+static esp_err_t send_all(async_frame_resp *afr, const char *buf, ssize_t buf_len)
+{
+    while (buf_len > 0)
+    {
+        int len = httpd_socket_send(afr->hd, afr->fd, buf, buf_len, 0);
+
+        if (len < 0)
+        {
+            return ESP_ERR_HTTPD_RESP_SEND;
+        }
+        buf += len;
+        buf_len -= len;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t send_chunk(async_frame_resp *afr, const char *buf, ssize_t buf_len)
+{
+    char len_str[10];
+    snprintf(len_str, sizeof(len_str), "%x\r\n", buf_len);
+    if (send_all(afr, len_str, strlen(len_str)) != ESP_OK)
+    {
+        return ESP_ERR_HTTPD_RESP_SEND;
+    }
+
+    if (buf != nullptr)
+    {
+        if (send_all(afr, buf, (size_t) buf_len) != ESP_OK)
+        {
+            return ESP_ERR_HTTPD_RESP_SEND;
+        }
+    }
+
+    /* Indicate end of chunk */
+    if (send_all(afr, "\r\n", 2) != ESP_OK)
+    {
+        return ESP_ERR_HTTPD_RESP_SEND;
+    }
+    return ESP_OK;
+}
+
+static void send_next_frame(void *data)
+{
+    async_frame_resp *afr = static_cast<async_frame_resp *>(data);
+    ESP_LOGI(TAG, "stream next frame: %d", afr->fd);
+
+    camera_fb_t * fb = esp_camera_fb_get();
+    if (fb == nullptr)
+    {
+        ESP_LOGE(TAG, "Camera capture failed");
+        free(afr);
+        return;
+    }
+
     size_t _jpg_buf_len;
     uint8_t * _jpg_buf;
+
+    if (fb->format != PIXFORMAT_JPEG)
+    {
+        bool jpeg_converted = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len);
+        if(!jpeg_converted)
+        {
+            ESP_LOGE(TAG, "JPEG compression failed");
+            esp_camera_fb_return(fb);
+            free(afr);
+            return;
+        }
+    }
+    else 
+    {
+        _jpg_buf_len = fb->len;
+        _jpg_buf = fb->buf;
+    }
+
+    int64_t send_start = esp_timer_get_time();
+
     char part_buf[128];
-    static int64_t last_frame = 0;
-    if(!last_frame) {
-        last_frame = esp_timer_get_time();
+    auto res = send_chunk(afr, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+
+    if (res == ESP_OK)
+    {
+        size_t hlen = snprintf(part_buf, 64, _STREAM_PART, _jpg_buf_len);
+
+        res = send_chunk(afr, part_buf, hlen);
     }
 
-    res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
-    if(res != ESP_OK){
-        return res;
+    if(res == ESP_OK)
+    {
+        res = send_chunk(afr, (const char *)_jpg_buf, _jpg_buf_len);
     }
 
-    while(true){
-        fb = esp_camera_fb_get();
-        if (!fb) {
-            ESP_LOGE(TAG, "Camera capture failed");
-            res = ESP_FAIL;
-            break;
-        }
-        if(fb->format != PIXFORMAT_JPEG){
-            bool jpeg_converted = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len);
-            if(!jpeg_converted){
-                ESP_LOGE(TAG, "JPEG compression failed");
-                esp_camera_fb_return(fb);
-                res = ESP_FAIL;
-            }
-        } else {
-            _jpg_buf_len = fb->len;
-            _jpg_buf = fb->buf;
-        }
-
-        ESP_LOGI(TAG, "Start send");
-        int64_t send_start = esp_timer_get_time();
-        if(res == ESP_OK){
-            res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
-        }
-        if(res == ESP_OK){
-            size_t hlen = snprintf(part_buf, 64, _STREAM_PART, _jpg_buf_len);
-
-            res = httpd_resp_send_chunk(req, part_buf, hlen);
-        }
-        if(res == ESP_OK){
-            res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
-        }
-        int64_t send_end = esp_timer_get_time();
-        int64_t send_time = send_end - send_start;
-        int64_t rate = (_jpg_buf_len * 1000000ll) / send_time;
-        ESP_LOGI(TAG, "Send rate %d bps %d in %d", (int32_t)rate, _jpg_buf_len, (int32_t)send_time);
-        if(fb->format != PIXFORMAT_JPEG){
-            free(_jpg_buf);
-        }
-        esp_camera_fb_return(fb);
-        if(res != ESP_OK){
-            ESP_LOGI(TAG, "Send err %d", (int)res);
-            break;
-        }
-        int64_t fr_end = esp_timer_get_time();
-        int64_t frame_time = fr_end - last_frame;
-        last_frame = fr_end;
-        frame_time /= 1000;
-        ESP_LOGI(TAG, "MJPG: %uKB %ums (%.1ffps)",
-            (uint32_t)(_jpg_buf_len/1024),
-            (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
+    int64_t send_end = esp_timer_get_time();
+    int64_t send_time = send_end - send_start;
+    int64_t rate = (_jpg_buf_len * 1000000ll) / send_time;
+    ESP_LOGI(TAG, "Send rate %d bps %d in %d", (int32_t)rate, _jpg_buf_len, (int32_t)send_time);
+    if(fb->format != PIXFORMAT_JPEG)
+    {
+        free(_jpg_buf);
     }
 
-    last_frame = 0;
-    return res;
+    esp_camera_fb_return(fb);
+
+    if (res != ESP_OK)
+    {
+        ESP_LOGI(TAG, "Send err %d", (int)res);
+        free(afr);
+        return;
+    }
+
+    int64_t fr_end = esp_timer_get_time();
+    int64_t frame_time = fr_end - afr->last_frame_time;
+    afr->last_frame_time = fr_end;
+    frame_time /= 1000;
+    ESP_LOGI(TAG, "MJPG: fd %d: %uKB %ums (%.1ffps)", afr->fd, (uint32_t)(_jpg_buf_len/1024), (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
+    httpd_queue_work(afr->hd, send_next_frame, afr);
+}
+
+static esp_err_t stream_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "stream2 req: %d", httpd_req_to_sockfd(req));
+    auto *afr = static_cast<async_frame_resp*>(malloc(sizeof(struct async_frame_resp)));
+    afr->hd = req->handle;
+    afr->fd = httpd_req_to_sockfd(req);
+    afr->last_frame_time = esp_timer_get_time();
+    if (afr->fd < 0) 
+    {
+        return ESP_FAIL;
+    }
+
+    const char *httpd_hdr_str = "HTTP/1.1 200 ok\r\nContent-Type: " _STREAM_CONTENT_TYPE "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+    auto res = send_all(afr, httpd_hdr_str, strlen(httpd_hdr_str));
+    if (res != ESP_OK)
+    {
+        ESP_LOGI(TAG, "send header failed : %d", res);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Queuing work fd : %d", afr->fd);
+    res = httpd_queue_work(req->handle, send_next_frame, afr);
+    if (res != ESP_OK)
+    {
+       ESP_LOGI(TAG, "Queuing work failed : %d", res);
+    }
+    return ESP_OK;
 }

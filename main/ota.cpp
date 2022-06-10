@@ -73,7 +73,7 @@ const char *update_page = R"!(<html>
 					xhr.upload.onprogress = function (e) {
                         let percent = (e.loaded / e.total * 100).toFixed(0);
 						let progress2 = document.getElementById("progress2");
-						progress2.textContent = "Progress: " + percent + "%";
+						progress2.textContent = "" + percent + "%";
 						let progress = document.getElementById("progress");
                         progress.value = percent;
 						progress.textContent = "" + percent + "%";
@@ -90,11 +90,11 @@ const char *update_page = R"!(<html>
 			<label for="otafile">Firmware file:</label>
 			<input type="file" id="otafile" name="otafile" />
 		</div>
-		<div>
+		<span>
 			<button id="upload" type="button" onclick="startUpload()">Upload</button>
-		</div>
-        <progress id="progress" value="0" max="100"></progress>
-		<div id="progress2"></div>
+		</span><span>
+        <progress id="progress" value="0" max="100"></progress></span>
+		<span id="progress2"></span>
 	</body>
 </html>)!";
 
