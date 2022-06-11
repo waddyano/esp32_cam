@@ -9,8 +9,7 @@ const char *index_page = R"!(<html>
             {
                 if (imagepanel.innerHTML != '')
                 {   
-                    image.src="";
-                    image.src="/still";
+                    image.src="/still?x=" + new Date().getTime();
                 }
                 else
                 {

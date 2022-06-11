@@ -215,9 +215,17 @@ static esp_err_t config_handler(httpd_req_t *req)
                 {
                     s->set_framesize(s, FRAMESIZE_SVGA);
                 }
+                else if (strcmp(param, "vga") == 0)
+                {
+                    s->set_framesize(s, FRAMESIZE_VGA);
+                }
                 else if (strcmp(param, "xga") == 0)
                 {
                     s->set_framesize(s, FRAMESIZE_XGA);
+                }
+                else if (strcmp(param, "cif") == 0)
+                {
+                    s->set_framesize(s, FRAMESIZE_CIF);
                 }
             }
             if (httpd_query_key_value(buf, "vflip", param, sizeof(param)) == ESP_OK) 
@@ -396,20 +404,25 @@ extern "C" void app_main(void)
             s->set_vflip(s, persistent_flags & 1);
             s->set_hmirror(s, (persistent_flags & 2) != 0);
         }
-
     }
-
 
     ota_mark_valid();
 
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "pool.ntp.org");
     sntp_init();
+    setenv("TZ", "PDT-7", 1);
+    tzset();
     sntp_set_time_sync_notification_cb([](timeval *tv)
         { 
             struct tm t;
             localtime_r(&tv->tv_sec, &t);
             char buf[32];
+            size_t len = strlen(buf);
+            if (len > 0)
+            {
+                buf[len - 1] = '0';
+            }
             ESP_LOGI(TAG, "Time synchronized %s", asctime_r(&t, buf));
 
         });
