@@ -73,7 +73,7 @@ static esp_err_t get_saved_flags()
     }
 
     err = nvs_get_u32(nvs_handle, "flags", &persistent_flags);
-    ESP_LOGI(TAG, "read saved flags %u, err %d\n", persistent_flags, err);
+    ESP_LOGI(TAG, "read saved flags %u, err %d", persistent_flags, err);
     nvs_close(nvs_handle);
 
     return ESP_OK;
@@ -90,7 +90,7 @@ static esp_err_t set_saved_flags()
     }
 
     err = nvs_set_u32(nvs_handle, "flags", persistent_flags);
-    ESP_LOGI(TAG, "save saved flags %u, err %d\n", persistent_flags, err);
+    ESP_LOGI(TAG, "save saved flags %u, err %d", persistent_flags, err);
     nvs_close(nvs_handle);
     return ESP_OK;
 }
@@ -411,19 +411,20 @@ extern "C" void app_main(void)
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "pool.ntp.org");
     sntp_init();
-    setenv("TZ", "PDT-7", 1);
+    setenv("TZ", "PDT+07", 1);
     tzset();
     sntp_set_time_sync_notification_cb([](timeval *tv)
         { 
             struct tm t;
             localtime_r(&tv->tv_sec, &t);
             char buf[32];
+            asctime_r(&t, buf);
             size_t len = strlen(buf);
             if (len > 0)
             {
-                buf[len - 1] = '0';
+                buf[len - 1] = '\0';
             }
-            ESP_LOGI(TAG, "Time synchronized %s", asctime_r(&t, buf));
+            ESP_LOGI(TAG, "Time synchronized %s", buf);
 
         });
 
@@ -451,6 +452,63 @@ static size_t jpg_encode_stream(void * arg, size_t index, const void* data, size
     return len;
 }
 
+static const uint8_t jfif_header[] = 
+{
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x00,  //      0: ......JFIF......
+    0x00, 0x00, 0x00, 0x00                                                                           //     10: ....
+};
+
+static const uint8_t exif_header[] =
+{
+    0xff, 0xd8, 0xff, 0xe1, 0x00, 0x86, 0x45, 0x78, 0x69, 0x66, 0x00, 0x00, 0x49, 0x49, 0x2a, 0x00,  //      0: ......Exif..II*.
+    0x08, 0x00, 0x00, 0x00, 0x02, 0x00, 0x32, 0x01, 0x02, 0x00, 0x14, 0x00, 0x00, 0x00, 0x26, 0x00,  //     10: ......2.......&.
+    0x00, 0x00, 0x69, 0x87, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3a, 0x00, 0x00, 0x00, 0x60, 0x00,  //     20: ..i.......:...`.
+    0x00, 0x00, 0x32, 0x30, 0x32, 0x32, 0x3a, 0x30, 0x36, 0x3a, 0x31, 0x30, 0x20, 0x32, 0x31, 0x3a,  //     30: ..2022:06:10 21:
+    0x32, 0x34, 0x3a, 0x35, 0x31, 0x00, 0x01, 0x00, 0x03, 0x90, 0x02, 0x00, 0x14, 0x00, 0x00, 0x00,  //     40: 24:51...........
+    0x4c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x30, 0x32, 0x32, 0x3a, 0x30, 0x36, 0x3a,  //     50: L.......2022:06:
+    0x31, 0x30, 0x20, 0x32, 0x31, 0x3a, 0x32, 0x34, 0x3a, 0x35, 0x31, 0x00, 0x02, 0x00, 0x01, 0x02,  //     60: 10 21:24:51.....
+    0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x7e, 0x00, 0x00, 0x00, 0x02, 0x02, 0x04, 0x00, 0x01, 0x00,  //     70: ......~.........
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00                                       //     80: ..........
+};
+
+static esp_err_t socket_send_all(httpd_handle_t hd, int fd, const char *buf, ssize_t buf_len)
+{
+    while (buf_len > 0)
+    {
+        int len = httpd_socket_send(hd, fd, buf, buf_len, 0);
+
+        if (len < 0)
+        {
+            return ESP_ERR_HTTPD_RESP_SEND;
+        }
+        buf += len;
+        buf_len -= len;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t send_jpeg_as_exif(httpd_handle_t hd, int fd, const char *buf, ssize_t buf_len)
+{
+    char tmp_header[sizeof(exif_header)];
+    memcpy(tmp_header, exif_header, sizeof(exif_header));
+    time_t now;
+    time(&now);
+    struct tm t;
+    localtime_r(&now, &t);
+    if (snprintf(tmp_header + 50, 20, "%4d:%02d:%02d %02d:%02d:%02d", 1900 + t.tm_year, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec) > 0)
+    {
+        ESP_LOGI(TAG, "timestamp %s", tmp_header + 50);
+    }
+    memcpy(tmp_header + 88, tmp_header + 50, 20);
+    esp_err_t res = socket_send_all(hd, fd, tmp_header, sizeof(exif_header));
+    if (res == ESP_OK)
+    {
+        res = socket_send_all(hd, fd, buf + sizeof(jfif_header), buf_len - sizeof(jfif_header));
+    }
+    return res;
+}
+
 static esp_err_t still_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "still_httpd req: %d", httpd_req_to_sockfd(req));
@@ -475,14 +533,28 @@ static esp_err_t still_handler(httpd_req_t *req)
     }
     res = httpd_resp_set_hdr(req, "Connection", "close");
 
-    size_t fb_len = 0;
+    unsigned int fb_len = 0;
     if(res == ESP_OK)
     {
         if(fb->format == PIXFORMAT_JPEG)
         {
             fb_len = fb->len;
-            ESP_LOGI(TAG, "jpeg fb %d", fb->len);
-            res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+            // A bit of a hack having seen the source of http_resp_send. If you pass in a non-zero length but a null buffer
+            // all the headers are sent for you including Content-length but none of the body allowing sending of the body here without
+            // copying everything out of the fb buffer as we only need to change the header from jfif to exif
+            if (fb->len > sizeof(jfif_header) && memcmp(fb->buf, jfif_header, sizeof(jfif_header)) == 0)
+            {
+                int new_len = fb->len + sizeof(exif_header) - sizeof(jfif_header);
+                res = httpd_resp_send(req, nullptr, new_len);
+                if (res == ESP_OK)
+                {
+                    res = send_jpeg_as_exif(req->handle, httpd_req_to_sockfd(req), (const char *)fb->buf, fb->len);
+                }
+            }
+            else
+            {
+                res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+            }
         }
         else
         {
@@ -495,7 +567,7 @@ static esp_err_t still_handler(httpd_req_t *req)
 
     esp_camera_fb_return(fb);
     int64_t fr_end = esp_timer_get_time();
-    ESP_LOGI(TAG, "JPG: %uKB %ums", (uint32_t)(fb_len/1024), (uint32_t)((fr_end - fr_start)/1000));
+    ESP_LOGI(TAG, "JPG: %ub %ums", fb_len, (uint32_t)((fr_end - fr_start)/1000));
     return res;
 }
 
@@ -508,19 +580,7 @@ struct async_frame_resp
 
 static esp_err_t send_all(async_frame_resp *afr, const char *buf, ssize_t buf_len)
 {
-    while (buf_len > 0)
-    {
-        int len = httpd_socket_send(afr->hd, afr->fd, buf, buf_len, 0);
-
-        if (len < 0)
-        {
-            return ESP_ERR_HTTPD_RESP_SEND;
-        }
-        buf += len;
-        buf_len -= len;
-    }
-
-    return ESP_OK;
+    return socket_send_all(afr->hd, afr->fd, buf, buf_len);
 }
 
 static esp_err_t send_chunk(async_frame_resp *afr, const char *buf, ssize_t buf_len)
@@ -561,12 +621,12 @@ static void send_next_frame(void *data)
         return;
     }
 
-    size_t _jpg_buf_len;
-    uint8_t * _jpg_buf;
+    size_t jpg_buf_len;
+    uint8_t * jpg_buf;
 
     if (fb->format != PIXFORMAT_JPEG)
     {
-        bool jpeg_converted = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len);
+        bool jpeg_converted = frame2jpg(fb, 80, &jpg_buf, &jpg_buf_len);
         if(!jpeg_converted)
         {
             ESP_LOGE(TAG, "JPEG compression failed");
@@ -577,8 +637,8 @@ static void send_next_frame(void *data)
     }
     else 
     {
-        _jpg_buf_len = fb->len;
-        _jpg_buf = fb->buf;
+        jpg_buf_len = fb->len;
+        jpg_buf = fb->buf;
     }
 
     int64_t send_start = esp_timer_get_time();
@@ -588,23 +648,41 @@ static void send_next_frame(void *data)
 
     if (res == ESP_OK)
     {
-        size_t hlen = snprintf(part_buf, 64, _STREAM_PART, _jpg_buf_len);
+        size_t hlen = snprintf(part_buf, 64, _STREAM_PART, jpg_buf_len);
 
         res = send_chunk(afr, part_buf, hlen);
     }
 
-    if(res == ESP_OK)
+    if (res == ESP_OK)
     {
-        res = send_chunk(afr, (const char *)_jpg_buf, _jpg_buf_len);
+        if (jpg_buf_len > sizeof(jfif_header) && memcmp(jpg_buf, jfif_header, sizeof(jfif_header)) == 0)
+        {
+            int new_len = jpg_buf_len + sizeof(exif_header) - sizeof(jfif_header);
+            char len_str[10];
+            snprintf(len_str, sizeof(len_str), "%x\r\n", new_len);
+            res = send_all(afr, len_str, strlen(len_str));
+            if (res == ESP_OK)
+            {
+                res = send_jpeg_as_exif(afr->hd, afr->fd, (const char *)jpg_buf, jpg_buf_len);
+            }
+            if (res == ESP_OK)
+            {
+                res = send_all(afr, "\r\n", 2); // end of chunk
+            }
+        }
+        else
+        {
+            res = send_chunk(afr, (const char *)jpg_buf, jpg_buf_len);
+        }
     }
 
     int64_t send_end = esp_timer_get_time();
     int64_t send_time = send_end - send_start;
-    int64_t rate = (_jpg_buf_len * 1000000ll) / send_time;
-    ESP_LOGI(TAG, "Send rate %d bps %d in %d", (int32_t)rate, _jpg_buf_len, (int32_t)send_time);
+    int64_t rate = (jpg_buf_len * 1000000ll) / send_time;
+    ESP_LOGI(TAG, "Send rate %d bps %d in %d", (int32_t)rate, jpg_buf_len, (int32_t)send_time);
     if(fb->format != PIXFORMAT_JPEG)
     {
-        free(_jpg_buf);
+        free(jpg_buf);
     }
 
     esp_camera_fb_return(fb);
@@ -620,7 +698,7 @@ static void send_next_frame(void *data)
     int64_t frame_time = fr_end - afr->last_frame_time;
     afr->last_frame_time = fr_end;
     frame_time /= 1000;
-    ESP_LOGI(TAG, "MJPG: fd %d: %uKB %ums (%.1ffps)", afr->fd, (uint32_t)(_jpg_buf_len/1024), (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
+    ESP_LOGI(TAG, "MJPG: fd %d: %uKB %ums (%.1ffps)", afr->fd, (uint32_t)(jpg_buf_len/1024), (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
     httpd_queue_work(afr->hd, send_next_frame, afr);
 }
 
