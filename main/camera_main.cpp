@@ -30,6 +30,8 @@
 
 #include <esp_http_server.h>
 
+const gpio_num_t LED_PIN = GPIO_NUM_4;
+static bool led_state = false;
 
 #define TAG "camera"
 #define PART_BOUNDARY "123456789000000000000987654321"
@@ -155,6 +157,12 @@ static void print_chip_info(int (*printfn)(const char *format, ...))
     printfn("</pre></body></html>\n");
 }
 
+static void set_led(bool on)
+{
+    led_state = on;
+    gpio_set_level(LED_PIN, (int)led_state);
+}
+
 static esp_err_t status_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "status req: %p", * (void **)req->aux);
@@ -187,6 +195,12 @@ static esp_err_t log_handler(httpd_req_t *req)
         free(buf);
     }
 
+    return httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t led_handler(httpd_req_t *req)
+{
+    set_led(!led_state);
     return httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
 }
 
@@ -349,6 +363,12 @@ static httpd_handle_t start_webserver(void)
         update_config.handler  = config_handler;
         httpd_register_uri_handler(server, &update_config);
 
+        httpd_uri_t led_config{};
+        led_config.uri	  = "/led";
+        led_config.method   = HTTP_GET;
+        led_config.handler  = led_handler;
+        httpd_register_uri_handler(server, &led_config);
+
         httpd_uri_t log_config{};
         log_config.uri	  = "/log";
         log_config.method   = HTTP_GET;
@@ -373,6 +393,9 @@ static httpd_handle_t start_webserver(void)
 
 extern "C" void app_main(void)
 {
+    gpio_pad_select_gpio(LED_PIN); 
+    gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT); 
+    set_led(true);
     print_chip_info(printf);
 
     esp_err_t err =  nvs_flash_init();
@@ -430,6 +453,7 @@ extern "C" void app_main(void)
 
     //int ret = xTaskCreatePinnedToCore(thread_routine, name, stacksize, arg, prio, thread, core_id);
 
+    set_led(false);
     start_webserver();
 }
 
@@ -531,7 +555,10 @@ static esp_err_t still_handler(httpd_req_t *req)
     {
         res = httpd_resp_set_hdr(req, "Cache-control", "no-cache");
     }
-    res = httpd_resp_set_hdr(req, "Connection", "close");
+    if (res == ESP_OK)
+    {
+        res = httpd_resp_set_hdr(req, "Connection", "close");
+    }
 
     unsigned int fb_len = 0;
     if(res == ESP_OK)
