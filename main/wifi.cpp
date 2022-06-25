@@ -23,6 +23,9 @@
 #define CAMERA_ESP_WIFI_PASS      setup_wifi_details
 
 #if __has_include("wifi_details.h")
+#undef CAMERA_ESP_WIFI_SSID
+#undef CAMERA_ESP_WIFI_PASS
+
 #include "wifi_details.h"
 #endif
 
