@@ -144,12 +144,18 @@ function hflip()
         image.src=image.src;
     }
 }
+function framesize(size)
+{
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/config?resolution=" + size);
+    xhr.send();
+}
         </script>
         <style>
 #imagepanel { display: grid; height: 100%; }
-#date { font-size:1.2rem; margin: 0 auto; }
+#date { line-height: 2.4rem; font-size:1.2rem; font-family: Sans-Serif; margin: 0 auto; }
 #datewrapper { text-align:center; }
-.center { max-width: 100%; max-height: 100vh; margin: auto; }
+.center { max-width: 100%; max-height: 100vh; margin: 0 auto; }
 button { border: 0; border-radius: 0.3rem; background:#1fa3ec; color:#ffffff; line-height:2.4rem; font-size:1.2rem; width:160px;
 -webkit-transition-duration:0.4s;transition-duration:0.4s;cursor:pointer;}
 button:hover{background:#0b73aa;}
@@ -165,6 +171,11 @@ button:hover{background:#0b73aa;}
             <td><a href="/status"><button type="button">Status</button></a></td>
             <td><a href="/update"><button type="button">Update</button></a></td>
             <td><button onclick="restart()">Restart</button></td>
+        </tr><tr>
+            <td><button onclick="framesize('cif')">CIF</button></td>
+            <td><button onclick="framesize('vga')">VGA</button></td>
+            <td><button onclick="framesize('svga')">SVGA</button></td>
+            <td><button onclick="framesize('xga')">XGA</button></td>
         </tr></table>
         <div id="datewrapper">
             <div id="date"></div>

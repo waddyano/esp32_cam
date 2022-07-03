@@ -99,7 +99,6 @@ static esp_err_t set_saved_flags()
 
 static void print_chip_info(int (*printfn)(const char *format, ...))
 {
-    printfn("<html><body><pre>\n");
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
     printfn("This is %s chip with %d CPU core(s), WiFi%s%s, ",
@@ -116,6 +115,21 @@ static void print_chip_info(int (*printfn)(const char *format, ...))
 
     printfn("%dMB %s flash\n", spi_flash_get_chip_size() / (1024 * 1024),
             (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+    printfn("MAC %02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    const char *name;
+    esp_err_t err = tcpip_adapter_get_hostname(TCPIP_ADAPTER_IF_STA, &name);
+    if (err == ESP_OK)
+    {
+        printfn("hostname: %s\n", name);
+    }
+    else
+    {
+        printfn("get hostname err: %d\n", err);
+    }
 
     printfn("Minimum free heap size: %d bytes\n", esp_get_minimum_free_heap_size());
 
@@ -167,7 +181,9 @@ static esp_err_t status_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "status req: %p", * (void **)req->aux);
     buf_offset = 0;
-    print_chip_info(buf_printf);
+    buf_printf("<html><body><a href=\"/\">Home</a><br/><pre>\n");
+    print_chip_info(buf_printf);    
+    buf_printf("</pre></body></html>\n");
     esp_err_t res = httpd_resp_set_type(req, "text/html");
     if(res != ESP_OK){
         return res;

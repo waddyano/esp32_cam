@@ -14,6 +14,7 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_rom_md5.h" // to get hash function
 #include "wifi.h"
 
 #include "lwip/err.h"
@@ -44,21 +45,49 @@ static const char *TAG = "wifi station";
 
 static int s_retry_num = 0;
 
+static unsigned short get_id()
+{
+    md5_context_t context;
+    unsigned char digest[16];
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+    esp_rom_md5_init(&context);
+    esp_rom_md5_update(&context, mac, 6);
+    esp_rom_md5_final(digest, &context);
+    return (digest[14] << 8) | digest[15];
+}
+
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
+        char name[18];
+        snprintf(name, sizeof(name), "esp_camera_%u", get_id());
+        esp_err_t err = tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, name);
+        if (err != ESP_OK)
+        {
+            ESP_LOGI(TAG, "setting hostname err %d", err);
+        }
+
         esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < CAMERA_ESP_MAXIMUM_RETRY) {
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        if (s_retry_num < CAMERA_ESP_MAXIMUM_RETRY)
+        {
             esp_wifi_connect();
             s_retry_num++;
             ESP_LOGI(TAG, "retry to connect to the AP");
-        } else {
+        }
+        else
+        {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
         ESP_LOGI(TAG,"connect to the AP fail");
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+    }
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+    {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
