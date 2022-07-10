@@ -3,6 +3,7 @@
 const char *index_page = R"!(<html>
 	<head>
 		<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+        <!-- <meta name="viewport" content="width=device-width, initial-scale=1.0"/> -->
 		<title>ESP32 Camera</title>
         <script>
 function getString(dv, offset, length){
@@ -124,41 +125,72 @@ function restart()
     imagepanel.innerHTML='Restarting';
     window.location.href = '/restart';
 }
+function refresh()
+{
+    if (imagepanel.innerHTML != '' && image.src.startsWith("blob:"))
+    {   
+        snap();
+    }
+}
 function vflip()
 {
     var xhr = new XMLHttpRequest();
     xhr.open("GET", "/config?vflip=2");
     xhr.send();
-    if (imagepanel.innerHTML != '')
-    {   
-        image.src=image.src;
-    }
+    refresh();
 }
 function hflip()
 {
     var xhr = new XMLHttpRequest();
     xhr.open("GET", "/config?hflip=2");
     xhr.send();
-    if (imagepanel.innerHTML != '')
-    {   
-        image.src=image.src;
-    }
+    refresh();
 }
 function framesize(size)
 {
     var xhr = new XMLHttpRequest();
     xhr.open("GET", "/config?resolution=" + size);
     xhr.send();
+    refresh();
+}
+function bright(level) 
+{
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/config?brightness=" + level);
+    xhr.send();
+    refresh();
+}
+function contrast(level) 
+{
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/config?contrast=" + level);
+    xhr.send();
+    refresh();
+}
+function toggle(id)
+{
+    let row = document.querySelector(id);
+    if (row.style.display == "none" || row.style.display == "")
+        row.style.display = "table-row";
+    else
+        row.style.display = "none";
 }
         </script>
         <style>
-#imagepanel { display: grid; height: 100%; }
+body, textarea, button {font-family: arial, sans-serif;}
 #date { line-height: 2.4rem; font-size:1.2rem; font-family: Sans-Serif; margin: 0 auto; }
 #datewrapper { text-align:center; }
-.center { max-width: 100%; max-height: 100vh; margin: 0 auto; }
-button { border: 0; border-radius: 0.3rem; background:#1fa3ec; color:#ffffff; line-height:2.4rem; font-size:1.2rem; width:160px;
+#imagepanel { display: block; height: auto; }
+.center { max-width: 100%; max-height: 100vh; margin: auto; }
+button { border: 0; border-radius: 0.3rem; background:#1fa3ec; color:#ffffff; line-height:2.4rem; font-size:1.2rem; width:180px;
 -webkit-transition-duration:0.4s;transition-duration:0.4s;cursor:pointer;}
 button:hover{background:#0b73aa;}
+.cb { border: 0; border-radius: 0.3rem; font-family: arial, sans-serif; color: black; line-height:2.4rem; font-size:1.2rem;}
+input[type=checkbox] { height:1.2rem; width: 1.2rem;}
+label.sl { vertical-align: bottom; }
+#admin { display: none; }
+#picture { display: none; }
+#size { display: none; }
         </style>
 	</head>
 	<body onload="snap()">
@@ -168,10 +200,18 @@ button:hover{background:#0b73aa;}
             <td><button onclick="stream()">Stream</button></td>
             <td><button onclick="vflip()">VFlip</button></td>
             <td><button onclick="hflip()">HFlip</button></td>
+        </tr><tr>
+            <td><input type="checkbox" onclick="toggle('#picture')"><span class="cb">Picture</span></td>
+            <td><input type="checkbox" onclick="toggle('#size')"><span class="cb">Size</span></td>
+            <td><input type="checkbox" onclick="toggle('#admin')"><span class="cb">Admin</span></td>
+        </tr><tr id="picture">
+            <td><label class="sl"><input type="range" min="-2" max="2" value="0" class="slider" id="bright" oninput="bright(this.value)">Brightness</label></td>
+            <td><input type="range" min="-2" max="2" value="0" class="slider" id="contrast" oninput="contrast(this.value)"><label class="sl">Contrast</label></td>
+        </tr><tr id="admin">
             <td><a href="/status"><button type="button">Status</button></a></td>
             <td><a href="/update"><button type="button">Update</button></a></td>
             <td><button onclick="restart()">Restart</button></td>
-        </tr><tr>
+        </tr><tr id="size">
             <td><button onclick="framesize('cif')">CIF</button></td>
             <td><button onclick="framesize('vga')">VGA</button></td>
             <td><button onclick="framesize('svga')">SVGA</button></td>

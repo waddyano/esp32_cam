@@ -24,8 +24,10 @@
 #include "nvs_flash.h"
 
 #include "camera.h"
+#include "httpd_util.h"
 #include "index.h"
 #include "ota.h"
+#include "sse.h"
 #include "wifi.h"
 
 #include <esp_http_server.h>
@@ -258,7 +260,7 @@ static esp_err_t config_handler(httpd_req_t *req)
                     s->set_framesize(s, FRAMESIZE_CIF);
                 }
             }
-            if (httpd_query_key_value(buf, "vflip", param, sizeof(param)) == ESP_OK) 
+            else if (httpd_query_key_value(buf, "vflip", param, sizeof(param)) == ESP_OK) 
             {
                 ESP_LOGI(TAG, "Found URL query parameter => vflip=%s", param);
                 if (strcmp(param, "0") == 0 || strcmp(param, "1") == 0)
@@ -273,7 +275,7 @@ static esp_err_t config_handler(httpd_req_t *req)
                 persistent_flags = (persistent_flags & ~1u) | (s->status.vflip != 0);
                 set_saved_flags();
             }
-            if (httpd_query_key_value(buf, "hflip", param, sizeof(param)) == ESP_OK) 
+            else if (httpd_query_key_value(buf, "hflip", param, sizeof(param)) == ESP_OK) 
             {
                 ESP_LOGI(TAG, "Found URL query parameter => hflip=%s", param);
                 if (strcmp(param, "0") == 0 || strcmp(param, "1") == 0)
@@ -287,6 +289,18 @@ static esp_err_t config_handler(httpd_req_t *req)
                 }
                 persistent_flags = (persistent_flags & ~2u) | ((s->status.hmirror != 0) << 1);
                 set_saved_flags();
+            }
+            else if (httpd_query_key_value(buf, "contrast", param, sizeof(param)) == ESP_OK) 
+            {
+                ESP_LOGI(TAG, "Found URL query parameter => contrast=%s", param);
+                int level = atoi(param);
+                s->set_contrast(s, level);
+            }
+            else if (httpd_query_key_value(buf, "brightness", param, sizeof(param)) == ESP_OK) 
+            {
+                ESP_LOGI(TAG, "Found URL query parameter => brightness=%s", param);
+                int level = atoi(param);
+                s->set_brightness(s, level);
             }
         }
         free(buf);
@@ -324,6 +338,14 @@ static esp_err_t restart_handler(httpd_req_t *req)
 	return ESP_OK;
 }
 
+static void server_close_fn(httpd_handle_t hd, int sockfd)
+{
+    ESP_LOGI(TAG, "client closed %d", sockfd);
+    int err = close(sockfd);
+    ESP_LOGI(TAG, "close stat %d", err);
+    sse_remove_sink(sockfd);
+}
+
 static httpd_handle_t start_webserver(void)
 {
     httpd_handle_t server = NULL;
@@ -331,6 +353,7 @@ static httpd_handle_t start_webserver(void)
     config.lru_purge_enable = true;
     config.max_uri_handlers = 32;
     config.core_id = 0;
+    config.close_fn = server_close_fn;
 
     // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
@@ -354,6 +377,12 @@ static httpd_handle_t start_webserver(void)
         stream.method    = HTTP_GET;
         stream.handler   = stream_handler;
         httpd_register_uri_handler(server, &stream);
+
+        httpd_uri_t events{};
+        events.uri       = "/events";
+        events.method    = HTTP_GET;
+        events.handler   = sse_handler;
+        httpd_register_uri_handler(server, &events);
 
         httpd_uri_t still{};
         still.uri       = "/still";
@@ -400,6 +429,8 @@ static httpd_handle_t start_webserver(void)
         #if CONFIG_EXAMPLE_BASIC_AUTH
         httpd_register_basic_auth(server);
         #endif
+        ESP_LOGI(TAG, "Registered URI handlers");
+        sse_init();
         return server;
     }
 
@@ -511,23 +542,6 @@ static const uint8_t exif_header[] =
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00                                       //     80: ..........
 };
 
-static esp_err_t socket_send_all(httpd_handle_t hd, int fd, const char *buf, ssize_t buf_len)
-{
-    while (buf_len > 0)
-    {
-        int len = httpd_socket_send(hd, fd, buf, buf_len, 0);
-
-        if (len < 0)
-        {
-            return ESP_ERR_HTTPD_RESP_SEND;
-        }
-        buf += len;
-        buf_len -= len;
-    }
-
-    return ESP_OK;
-}
-
 static esp_err_t send_jpeg_as_exif(httpd_handle_t hd, int fd, const char *buf, ssize_t buf_len)
 {
     char tmp_header[sizeof(exif_header)];
@@ -626,31 +640,6 @@ static esp_err_t send_all(async_frame_resp *afr, const char *buf, ssize_t buf_le
     return socket_send_all(afr->hd, afr->fd, buf, buf_len);
 }
 
-static esp_err_t send_chunk(async_frame_resp *afr, const char *buf, ssize_t buf_len)
-{
-    char len_str[10];
-    snprintf(len_str, sizeof(len_str), "%x\r\n", buf_len);
-    if (send_all(afr, len_str, strlen(len_str)) != ESP_OK)
-    {
-        return ESP_ERR_HTTPD_RESP_SEND;
-    }
-
-    if (buf != nullptr)
-    {
-        if (send_all(afr, buf, (size_t) buf_len) != ESP_OK)
-        {
-            return ESP_ERR_HTTPD_RESP_SEND;
-        }
-    }
-
-    /* Indicate end of chunk */
-    if (send_all(afr, "\r\n", 2) != ESP_OK)
-    {
-        return ESP_ERR_HTTPD_RESP_SEND;
-    }
-    return ESP_OK;
-}
-
 static void send_next_frame(void *data)
 {
     async_frame_resp *afr = static_cast<async_frame_resp *>(data);
@@ -687,13 +676,13 @@ static void send_next_frame(void *data)
     int64_t send_start = esp_timer_get_time();
 
     char part_buf[128];
-    auto res = send_chunk(afr, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+    auto res = socket_send_chunk(afr->hd, afr->fd, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
 
     if (res == ESP_OK)
     {
         size_t hlen = snprintf(part_buf, 64, _STREAM_PART, jpg_buf_len);
 
-        res = send_chunk(afr, part_buf, hlen);
+        res = socket_send_chunk(afr->hd, afr->fd, part_buf, hlen);
     }
 
     if (res == ESP_OK)
@@ -715,7 +704,7 @@ static void send_next_frame(void *data)
         }
         else
         {
-            res = send_chunk(afr, (const char *)jpg_buf, jpg_buf_len);
+            res = socket_send_chunk(afr->hd, afr->fd, (const char *)jpg_buf, jpg_buf_len);
         }
     }
 
@@ -754,6 +743,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
     afr->last_frame_time = esp_timer_get_time();
     if (afr->fd < 0) 
     {
+        free(afr);
         return ESP_FAIL;
     }
 
@@ -762,14 +752,16 @@ static esp_err_t stream_handler(httpd_req_t *req)
     if (res != ESP_OK)
     {
         ESP_LOGI(TAG, "send header failed : %d", res);
-        return ESP_FAIL;
+        free(afr);
+        return res;
     }
 
     ESP_LOGI(TAG, "Queuing work fd : %d", afr->fd);
     res = httpd_queue_work(req->handle, send_next_frame, afr);
     if (res != ESP_OK)
     {
-       ESP_LOGI(TAG, "Queuing work failed : %d", res);
+        free(afr);
+        ESP_LOGI(TAG, "Queuing work failed : %d", res);
     }
-    return ESP_OK;
+    return res;
 }
