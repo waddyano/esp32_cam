@@ -43,58 +43,67 @@ const char *update_page = R"!(<html>
 		<meta http-equiv="content-type" content="text/html; charset=utf-8" />
 		<title>ESP32 Camera Update</title>
 		<script>
-			function startUpload() {
-				var otafile = document.getElementById("otafile").files;
+function startUpload() {
+    var otafile = document.getElementById("otafile").files;
 
-				if (otafile.length == 0) {
-					alert("No file selected!");
-				} else {
-					document.getElementById("otafile").disabled = true;
-					document.getElementById("upload").disabled = true;
+    if (otafile.length == 0) {
+        alert("No file selected!");
+    } else {
+        document.getElementById("otafile").disabled = true;
+        document.getElementById("upload").disabled = true;
 
-					var file = otafile[0];
-					var xhr = new XMLHttpRequest();
-					xhr.onreadystatechange = function() {
-						if (xhr.readyState == 4) {
-							if (xhr.status == 200) {
-								document.open();
-								document.write(xhr.responseText);
-								document.close();
-							} else if (xhr.status == 0) {
-								alert("Server closed the connection abruptly!");
-								location.reload()
-							} else {
-								alert(xhr.status + " Error!\n" + xhr.responseText);
-								location.reload()
-							}
-						}
-					};
+        var file = otafile[0];
+        var xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState == 4) {
+                if (xhr.status == 200) {
+                    document.open();
+                    document.write(xhr.responseText);
+                    document.close();
+                } else if (xhr.status == 0) {
+                    alert("Server closed the connection abruptly!");
+                    location.reload()
+                } else {
+                    alert(xhr.status + " Error!\n" + xhr.responseText);
+                    location.reload()
+                }
+            }
+        };
 
-					xhr.upload.onprogress = function (e) {
-                        let percent = (e.loaded / e.total * 100).toFixed(0);
-						let progress2 = document.getElementById("progress2");
-						progress2.textContent = "" + percent + "%";
-						let progress = document.getElementById("progress");
-                        progress.value = percent;
-						progress.textContent = "" + percent + "%";
-					};
-					xhr.open("POST", "/post_update", true);
-					xhr.send(file);
-				}
-			}
+        xhr.upload.onprogress = function (e) {
+            let percent = (e.loaded / e.total * 100).toFixed(0);
+            let progress2 = document.getElementById("progress2");
+            progress2.textContent = "" + percent + "%";
+            let progress = document.getElementById("progress");
+            progress.value = percent;
+            progress.textContent = "" + percent + "%";
+        };
+        xhr.open("POST", "/post_update", true);
+        xhr.send(file);
+    }
+}
 		</script>
+<style>
+body, textarea, label, button, input[type=file] {font-family: arial, sans-serif;}
+label, input[type=file] { line-height:2.4rem; font-size:1.2rem; }
+input::file-selector-button, button { border: 0; border-radius: 0.3rem; background:#1fa3ec; color:#ffffff; line-height:2.4rem; font-size:1.2rem; width:180px;
+-webkit-transition-duration:0.4s;transition-duration:0.4s;cursor:pointer;}
+button:hover{background:#0b73aa;}
+</style>
 	</head>
 	<body>
-		<h1>ESP32 Camera Update</h1>
-		<div>
-			<label for="otafile">Firmware file:</label>
-			<input type="file" id="otafile" name="otafile" />
-		</div>
-		<span>
-			<button id="upload" type="button" onclick="startUpload()">Upload</button>
-		</span><span>
-        <progress id="progress" value="0" max="100"></progress></span>
-		<span id="progress2"></span>
+		<h1 style="text-align: center">ESP32 Camera Update</h1>
+        <div style="margin-left:auto; margin-right: auto; display: table;">
+            <div style="padding: 6px">
+                <label for="otafile" class="file">Update firmware:&nbsp</label>
+                <input type="file" id="otafile" name="otafile" />
+            </div>
+            <span>
+                <button id="upload" type="button" onclick="startUpload()">Upload</button>
+            </span><span>
+            <progress id="progress" value="0" max="100"></progress></span>
+            <span id="progress2"></span>
+        </div>
 	</body>
 </html>)!";
 
@@ -223,13 +232,28 @@ void send_reboot_page(httpd_req_t *req, const char *msg)
 <head>
 	<title>Rebooting</title>
     <script>
-        setInterval(ping, 1000);
+        const id = setInterval(ping, 5000);
+        let controller = null;
 
         function ping()
         {
-            fetch('/').then(response => response.text()).then(function(data) { window.location.href = '/';});
+            if (controller != null)
+            {
+                controller.abort();
+            }
+            controller = new AbortController();
+            fetch('/', { signal: controller.signal })
+                .then(response => response.text())
+                .then(function(data) { clearInterval(id); window.location.href = '/'; })
+                .catch((error) => { console.error('Error:', error); });
         };
+
+        ping();
     </script>
+<style>
+body, p {font-family: arial, sans-serif;}
+p { line-height:2.4rem; font-size:1.2rem; }
+</style>
 </head>
 <body><p>
     )!";

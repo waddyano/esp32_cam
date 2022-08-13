@@ -6,6 +6,9 @@ const char *index_page = R"!(<html>
         <!-- <meta name="viewport" content="width=device-width, initial-scale=1.0"/> -->
 		<title>ESP32 Camera</title>
         <script>
+
+var eventSource = null;
+
 function getString(dv, offset, length){
     let end = offset + length;
     let text = '';
@@ -88,6 +91,11 @@ function getDate(buffer, callback) {
 
 function snap()
 {
+    if (eventSource != null)
+    {
+        eventSource.close();
+        eventSource = null;
+    }
     if (imagepanel.innerHTML == '')
     {
         imagepanel.innerHTML='<img id="image" class="center"/>';
@@ -119,6 +127,14 @@ function stream()
     {
         imagepanel.innerHTML='<img id="image" class="center" src="/stream"/>';
     }
+    if (eventSource != null)
+    {
+        eventSource.close();
+    }
+    eventSource = new EventSource("/events");
+    eventSource.addEventListener("status", function(m) {
+        console.log(m);
+    })
 }
 function restart()
 {
@@ -167,6 +183,13 @@ function contrast(level)
     xhr.send();
     refresh();
 }
+function led() 
+{
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/led");
+    xhr.send();
+    refresh();
+}
 function toggle(id)
 {
     let row = document.querySelector(id);
@@ -180,7 +203,9 @@ function toggle(id)
 body, textarea, button {font-family: arial, sans-serif;}
 #date { line-height: 2.4rem; font-size:1.2rem; font-family: Sans-Serif; margin: 0 auto; }
 #datewrapper { text-align:center; }
-#imagepanel { display: block; height: auto; }
+#imagepanel { display: grid; height: auto; }
+h1 { text-align: center; }
+.tabcenter { margin-left: auto; margin-right: auto; }
 .center { max-width: 100%; max-height: 100vh; margin: auto; }
 button { border: 0; border-radius: 0.3rem; background:#1fa3ec; color:#ffffff; line-height:2.4rem; font-size:1.2rem; width:180px;
 -webkit-transition-duration:0.4s;transition-duration:0.4s;cursor:pointer;}
@@ -195,11 +220,12 @@ label.sl { vertical-align: bottom; }
 	</head>
 	<body onload="snap()">
 		<h1>ESP32 Camera</h1>
-        <table><tr>
+        <table class="tabcenter"><tr>
             <td><button onclick="snap()">Still</button></td>
             <td><button onclick="stream()">Stream</button></td>
             <td><button onclick="vflip()">VFlip</button></td>
             <td><button onclick="hflip()">HFlip</button></td>
+            <td><button onclick="led()">LED</button></td>
         </tr><tr>
             <td><input type="checkbox" onclick="toggle('#picture')"><span class="cb">Picture</span></td>
             <td><input type="checkbox" onclick="toggle('#size')"><span class="cb">Size</span></td>

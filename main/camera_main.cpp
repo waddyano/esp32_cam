@@ -133,6 +133,10 @@ static void print_chip_info(int (*printfn)(const char *format, ...))
         printfn("get hostname err: %d\n", err);
     }
 
+    if (wifi_ssid[0] != '\0')
+    {
+        printfn("Wifi: %s\n", wifi_ssid);
+    }
     printfn("Minimum free heap size: %d bytes\n", esp_get_minimum_free_heap_size());
 
     multi_heap_info_t info;
@@ -169,8 +173,6 @@ static void print_chip_info(int (*printfn)(const char *format, ...))
     vTaskList(buf);
     printfn("%s\n", buf);
     free(buf);
-    
-    printfn("</pre></body></html>\n");
 }
 
 static void set_led(bool on)
@@ -183,7 +185,7 @@ static esp_err_t status_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "status req: %p", * (void **)req->aux);
     buf_offset = 0;
-    buf_printf("<html><body><a href=\"/\">Home</a><br/><pre>\n");
+    buf_printf("<html><body><a href=\"/\">Home</a><br/><pre style=\"font-size: 1.2rem\">\n");
     print_chip_info(buf_printf);    
     buf_printf("</pre></body></html>\n");
     esp_err_t res = httpd_resp_set_type(req, "text/html");
@@ -219,6 +221,9 @@ static esp_err_t log_handler(httpd_req_t *req)
 static esp_err_t led_handler(httpd_req_t *req)
 {
     set_led(!led_state);
+    const char *state = led_state ? "on" : "off";
+    ESP_LOGI(TAG, "LED is now %s", state);
+    sse_broadcast("led", state, strlen(state));
     return httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
 }
 
@@ -348,6 +353,8 @@ static void server_close_fn(httpd_handle_t hd, int sockfd)
 
 static httpd_handle_t start_webserver(void)
 {
+    sse_init();
+    
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
@@ -430,7 +437,6 @@ static httpd_handle_t start_webserver(void)
         httpd_register_basic_auth(server);
         #endif
         ESP_LOGI(TAG, "Registered URI handlers");
-        sse_init();
         return server;
     }
 
@@ -501,7 +507,8 @@ extern "C" void app_main(void)
     //int ret = xTaskCreatePinnedToCore(thread_routine, name, stacksize, arg, prio, thread, core_id);
 
     set_led(false);
-    start_webserver();
+    httpd_handle_t handle = start_webserver();
+    ESP_LOGI(TAG, "started webserver %p", handle);
 }
 
 typedef struct
@@ -640,6 +647,20 @@ static esp_err_t send_all(async_frame_resp *afr, const char *buf, ssize_t buf_le
     return socket_send_all(afr->hd, afr->fd, buf, buf_len);
 }
 
+static unsigned int n_frames;
+
+unsigned int camera_get_frame_count(bool reset)
+{
+    unsigned int res = n_frames;
+    
+    if (reset)
+    {
+        n_frames = 0;
+    }
+
+    return res;
+}
+
 static void send_next_frame(void *data)
 {
     async_frame_resp *afr = static_cast<async_frame_resp *>(data);
@@ -652,6 +673,8 @@ static void send_next_frame(void *data)
         free(afr);
         return;
     }
+
+    ++n_frames;
 
     size_t jpg_buf_len;
     uint8_t * jpg_buf;
@@ -712,7 +735,7 @@ static void send_next_frame(void *data)
     int64_t send_time = send_end - send_start;
     int64_t rate = (jpg_buf_len * 1000000ll) / send_time;
     ESP_LOGI(TAG, "Send rate %d bps %d in %d", (int32_t)rate, jpg_buf_len, (int32_t)send_time);
-    if(fb->format != PIXFORMAT_JPEG)
+    if (fb->format != PIXFORMAT_JPEG)
     {
         free(jpg_buf);
     }
