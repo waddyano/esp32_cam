@@ -17,6 +17,7 @@
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_netif.h"
+#include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_sntp.h"
 #include "esp_timer.h"
@@ -26,6 +27,7 @@
 #include "camera.h"
 #include "httpd_util.h"
 #include "index.h"
+#include "lwip/sockets.h"
 #include "ota.h"
 #include "sse.h"
 #include "wifi.h"
@@ -167,6 +169,8 @@ static void print_chip_info(int (*printfn)(const char *format, ...))
     }
     esp_partition_iterator_release(it);
 
+    const esp_partition_t *partition = esp_ota_get_running_partition();
+    printfn("Currently running partition: %s\n", partition->label);
     int nTasks = uxTaskGetNumberOfTasks();
     printfn("%d tasks\n", nTasks);
     char *buf = static_cast<char*>(malloc(50 * nTasks));
@@ -185,7 +189,7 @@ static esp_err_t status_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "status req: %p", * (void **)req->aux);
     buf_offset = 0;
-    buf_printf("<html><body><a href=\"/\">Home</a><br/><pre style=\"font-size: 1.2rem\">\n");
+    buf_printf("<html><body><a href=\".\">Home</a><br/><pre style=\"font-size: 1.2rem\">\n");
     print_chip_info(buf_printf);    
     buf_printf("</pre></body></html>\n");
     esp_err_t res = httpd_resp_set_type(req, "text/html");
@@ -313,16 +317,6 @@ static esp_err_t config_handler(httpd_req_t *req)
     return httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
 }
 
-static esp_err_t update_handler(httpd_req_t *req)
-{
-    esp_err_t res = httpd_resp_set_type(req, "text/html");
-    if(res != ESP_OK){
-        return res;
-    }
-    res = httpd_resp_set_hdr(req, "Connection", "close");
-	return httpd_resp_send(req, update_page, strlen(update_page));
-}
-
 static esp_err_t index_handler(httpd_req_t *req)
 {
     esp_err_t res = httpd_resp_set_type(req, "text/html");
@@ -335,7 +329,7 @@ static esp_err_t index_handler(httpd_req_t *req)
 
 static esp_err_t restart_handler(httpd_req_t *req)
 {
-	send_reboot_page(req, "Rebooting now!");
+	ota_send_reboot_page(req, "Rebooting now!");
 
 	vTaskDelay(500 / portTICK_PERIOD_MS);
 	esp_restart();
@@ -353,6 +347,7 @@ static void server_close_fn(httpd_handle_t hd, int sockfd)
 
 static httpd_handle_t start_webserver(void)
 {
+    esp_log_level_set("httpd_parse", ESP_LOG_DEBUG);  
     sse_init();
     
     httpd_handle_t server = NULL;
@@ -397,17 +392,7 @@ static httpd_handle_t start_webserver(void)
         still.handler   = still_handler,
         httpd_register_uri_handler(server, &still);
 
-        httpd_uri_t update{};
-        update.uri	  = "/update";
-        update.method   = HTTP_GET;
-        update.handler  = update_handler;
-        httpd_register_uri_handler(server, &update);
-
-        httpd_uri_t post_update{};
-        post_update.uri	  = "/post_update";
-        post_update.method   = HTTP_POST;
-        post_update.handler  = update_post_handler;
-        httpd_register_uri_handler(server, &post_update);
+        ota_add_endpoints(server);
 
         httpd_uri_t update_config{};
         update_config.uri	  = "/config";
@@ -652,7 +637,7 @@ static unsigned int n_frames;
 unsigned int camera_get_frame_count(bool reset)
 {
     unsigned int res = n_frames;
-    
+
     if (reset)
     {
         n_frames = 0;

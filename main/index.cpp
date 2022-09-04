@@ -89,6 +89,22 @@ function getDate(buffer, callback) {
     }
 };
 
+function rel_url(u)
+{
+    let h = window.location.href;
+    if (h.length > 0 && h[h.length - 1] != '/')
+    {
+        h = h + '/';
+    }
+    return h + u;
+}
+
+function loaded()
+{
+    status_button.href = rel_url('status');
+    update_button.href = rel_url('update');
+    snap();
+}
 function snap()
 {
     if (eventSource != null)
@@ -101,7 +117,7 @@ function snap()
         imagepanel.innerHTML='<img id="image" class="center"/>';
     }
     let img = document.querySelector('#image');
-    fetch('/still').then(function(response) 
+    fetch(rel_url('still')).then(function(response) 
     {
         return response.blob();
     }).then(function(blob) 
@@ -121,25 +137,48 @@ function stream()
 {
     if (imagepanel.innerHTML != '')
     {   
-        image.src="/stream";
+        image.src=rel_url("stream");
     }
     else
     {
-        imagepanel.innerHTML='<img id="image" class="center" src="/stream"/>';
+        imagepanel.innerHTML='<img id="image" class="center" src="' + rel_url('stream') + '>';
     }
     if (eventSource != null)
     {
         eventSource.close();
     }
-    eventSource = new EventSource("/events");
+    eventSource = new EventSource(rel_url('events'));
     eventSource.addEventListener("status", function(m) {
-        console.log(m);
+        let d = document.querySelector('#date');
+        let l = '';
+        try 
+        {
+            let ev = JSON.parse(m.data);
+            if ('time' in ev)
+            {
+                l = l + ev.time;
+            }
+            if ('frames' in ev)
+            {
+                if (l.length > 0)
+                {
+                    l = l + ' ';
+                }
+
+                l = l + ev.frames + ' fps';
+            }
+        }
+        catch(e) 
+        {
+        }
+        d.innerHTML = l;
+        //console.log(m);
     })
 }
 function restart()
 {
     imagepanel.innerHTML='Restarting';
-    window.location.href = '/restart';
+    window.location.href = rel_url('restart');
 }
 function refresh()
 {
@@ -151,42 +190,42 @@ function refresh()
 function vflip()
 {
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/config?vflip=2");
+    xhr.open("GET", rel_url('config') + "?vflip=2");
     xhr.send();
     refresh();
 }
 function hflip()
 {
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/config?hflip=2");
+    xhr.open("GET", rel_url('config') + "?hflip=2");
     xhr.send();
     refresh();
 }
 function framesize(size)
 {
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/config?resolution=" + size);
+    xhr.open("GET", rel_url('config') + "?resolution=" + size);
     xhr.send();
     refresh();
 }
 function bright(level) 
 {
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/config?brightness=" + level);
+    xhr.open("GET", rel_url('config') + "?brightness=" + level);
     xhr.send();
     refresh();
 }
 function contrast(level) 
 {
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/config?contrast=" + level);
+    xhr.open("GET", rel_url('config') + "?contrast=" + level);
     xhr.send();
     refresh();
 }
 function led() 
 {
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/led");
+    xhr.open("GET", rel_url('led'));
     xhr.send();
     refresh();
 }
@@ -218,7 +257,7 @@ label.sl { vertical-align: bottom; }
 #size { display: none; }
         </style>
 	</head>
-	<body onload="snap()">
+	<body onload="loaded()">
 		<h1>ESP32 Camera</h1>
         <table class="tabcenter"><tr>
             <td><button onclick="snap()">Still</button></td>
@@ -234,8 +273,8 @@ label.sl { vertical-align: bottom; }
             <td><label class="sl"><input type="range" min="-2" max="2" value="0" class="slider" id="bright" oninput="bright(this.value)">Brightness</label></td>
             <td><input type="range" min="-2" max="2" value="0" class="slider" id="contrast" oninput="contrast(this.value)"><label class="sl">Contrast</label></td>
         </tr><tr id="admin">
-            <td><a href="/status"><button type="button">Status</button></a></td>
-            <td><a href="/update"><button type="button">Update</button></a></td>
+            <td><a id="status_button"><button type="button">Status</button></a></td>
+            <td><a id="update_button"><button type="button">Update</button></a></td>
             <td><button onclick="restart()">Restart</button></td>
         </tr><tr id="size">
             <td><button onclick="framesize('cif')">CIF</button></td>

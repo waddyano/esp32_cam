@@ -32,7 +32,7 @@ static const char *bind_interface_name = "sta";
 #endif
 #endif
 
-static const char *TAG = "simple_ota_example";
+static const char *TAG = "ota";
 //extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
 //extern const uint8_t server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
 
@@ -135,6 +135,29 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
+static esp_err_t update_handler(httpd_req_t *req)
+{
+    size_t len = httpd_req_get_hdr_value_len(req, "X-Forwarded-Host");
+    ESP_LOGI(TAG, "forward host len %zd", len);
+    if (len != 0)
+    {
+        auto err = httpd_resp_set_status(req, "403 Not Authorized");
+        if (err != ESP_OK)
+        {
+            return err;
+        }
+    	return httpd_resp_send(req, nullptr, 0);
+    }
+
+    esp_err_t res = httpd_resp_set_type(req, "text/html");
+    if(res != ESP_OK)
+    {
+        return res;
+    }
+    res = httpd_resp_set_hdr(req, "Connection", "close");
+	return httpd_resp_send(req, update_page, strlen(update_page));
+}
+
 void simple_ota_example_task(void *pvParameter)
 {
     ESP_LOGI(TAG, "Starting OTA example");
@@ -214,7 +237,7 @@ static void get_sha256_of_partitions(void)
 void ota_mark_valid()
 {
 	const esp_partition_t *partition = esp_ota_get_running_partition();
-	printf("Currently running partition: %s\r\n", partition->label);
+	printf("Currently running partition: %s\n", partition->label);
 
 	esp_ota_img_states_t ota_state;
 	if (esp_ota_get_state_partition(partition, &ota_state) == ESP_OK) {
@@ -224,7 +247,7 @@ void ota_mark_valid()
 	}
 }
 
-void send_reboot_page(httpd_req_t *req, const char *msg)
+void ota_send_reboot_page(httpd_req_t *req, const char *msg)
 {
     httpd_resp_set_type(req, "text/html");
     const char *head = R"!(
@@ -263,10 +286,7 @@ p { line-height:2.4rem; font-size:1.2rem; }
 	httpd_resp_send_chunk(req, nullptr, 0);
 }
 
-/*
- * Handle OTA file upload
- */
-esp_err_t update_post_handler(httpd_req_t *req)
+static esp_err_t update_post_handler(httpd_req_t *req)
 {
 	char buf[1000];
 	esp_ota_handle_t ota_handle;
@@ -304,7 +324,7 @@ esp_err_t update_post_handler(httpd_req_t *req)
 			return ESP_FAIL;
 	}
 
-    send_reboot_page(req, "Firmware update complete, rebooting now!");
+    ota_send_reboot_page(req, "Firmware update complete, rebooting now!");
 
 	vTaskDelay(500 / portTICK_PERIOD_MS);
 	esp_restart();
@@ -312,3 +332,17 @@ esp_err_t update_post_handler(httpd_req_t *req)
 	return ESP_OK;
 }
 
+extern void ota_add_endpoints(httpd_handle_t server)
+{
+    httpd_uri_t update{};
+    update.uri	  = "/update";
+    update.method   = HTTP_GET;
+    update.handler  = update_handler;
+    httpd_register_uri_handler(server, &update);
+
+    httpd_uri_t post_update{};
+    post_update.uri	  = "/post_update";
+    post_update.method   = HTTP_POST;
+    post_update.handler  = update_post_handler;
+    httpd_register_uri_handler(server, &post_update);
+}
