@@ -207,31 +207,31 @@ void simple_ota_example_task(void *pvParameter)
     vTaskDelete(nullptr);
 }
 
-static void print_sha256(const uint8_t *image_hash, const char *label)
+static const char *hex = "0123456789abcdef";
+
+static void format_sha256(const uint8_t *image_hash, char *formatted)
 {
-    char hash_print[HASH_LEN * 2 + 1];
-    hash_print[HASH_LEN * 2] = 0;
-    for (int i = 0; i < HASH_LEN; ++i) {
-        sprintf(&hash_print[i * 2], "%02x", image_hash[i]);
+    for (int i = 0; i < HASH_LEN; ++i)
+    {
+        formatted[i * 2] = hex[(image_hash[i] >> 4) & 0xf];
+        formatted[i * 2 + 1] = hex[image_hash[i] & 0xf];
     }
-    ESP_LOGI(TAG, "%s %s", label, hash_print);
+    formatted[2 * HASH_LEN] = '\0';
 }
 
-static void get_sha256_of_partitions(void)
+void ota_get_partition_hashes(char *boot_hash, char *current_partition_hash)
 {
     uint8_t sha_256[HASH_LEN] = { 0 };
     esp_partition_t partition;
 
-    // get sha256 digest for bootloader
     partition.address   = ESP_BOOTLOADER_OFFSET;
     partition.size      = ESP_PARTITION_TABLE_OFFSET;
     partition.type      = ESP_PARTITION_TYPE_APP;
     esp_partition_get_sha256(&partition, sha_256);
-    print_sha256(sha_256, "SHA-256 for bootloader: ");
+    format_sha256(sha_256, boot_hash);
 
-    // get sha256 digest for running partition
     esp_partition_get_sha256(esp_ota_get_running_partition(), sha_256);
-    print_sha256(sha_256, "SHA-256 for current firmware: ");
+    format_sha256(sha_256, current_partition_hash);
 }
 
 void ota_mark_valid()
@@ -332,6 +332,16 @@ static esp_err_t update_post_handler(httpd_req_t *req)
 	return ESP_OK;
 }
 
+static esp_err_t restart_handler(httpd_req_t *req)
+{
+	ota_send_reboot_page(req, "Rebooting now!");
+
+	vTaskDelay(500 / portTICK_PERIOD_MS);
+	esp_restart();
+
+	return ESP_OK;
+}
+
 extern void ota_add_endpoints(httpd_handle_t server)
 {
     httpd_uri_t update{};
@@ -345,4 +355,10 @@ extern void ota_add_endpoints(httpd_handle_t server)
     post_update.method   = HTTP_POST;
     post_update.handler  = update_post_handler;
     httpd_register_uri_handler(server, &post_update);
+
+    httpd_uri_t restart{};
+    restart.uri	  = "/restart";
+    restart.method   = HTTP_GET;
+    restart.handler  = restart_handler;
+    httpd_register_uri_handler(server, &restart);
 }

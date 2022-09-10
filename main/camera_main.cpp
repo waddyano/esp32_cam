@@ -48,20 +48,25 @@ static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %
 static esp_err_t stream_handler(httpd_req_t *req);
 static esp_err_t still_handler(httpd_req_t *req);
 
-static char page_buf[1024];
+static char page_buf[1536];
 static int buf_offset;
 
 static unsigned int persistent_flags;
 
 static int buf_printf(const char *format, ...)
 {
+    if (buf_offset >= sizeof(page_buf) - 1)
+    {
+        return -1;
+    }
     va_list ap;
     va_start(ap, format);
-    int n = vsnprintf(page_buf + buf_offset, sizeof(page_buf) - buf_offset, format, ap);
+    int left = sizeof(page_buf) - buf_offset;
+    int n = vsnprintf(page_buf + buf_offset, left, format, ap);
     va_end(ap);
     if (n > 0)
     {
-        buf_offset += n;
+        buf_offset += n > left ? left - 1 : n;
     }
 
     return n;
@@ -171,6 +176,10 @@ static void print_chip_info(int (*printfn)(const char *format, ...))
 
     const esp_partition_t *partition = esp_ota_get_running_partition();
     printfn("Currently running partition: %s\n", partition->label);
+    char boot_hash[65], current_hash[65];
+    ota_get_partition_hashes(boot_hash, current_hash);
+    printfn("boot sha256: %s\n", boot_hash);
+    printfn("current partition sha256: %s\n", current_hash);
     int nTasks = uxTaskGetNumberOfTasks();
     printfn("%d tasks\n", nTasks);
     char *buf = static_cast<char*>(malloc(50 * nTasks));
@@ -327,16 +336,6 @@ static esp_err_t index_handler(httpd_req_t *req)
 	return httpd_resp_send(req, index_page, strlen(index_page));
 }
 
-static esp_err_t restart_handler(httpd_req_t *req)
-{
-	ota_send_reboot_page(req, "Rebooting now!");
-
-	vTaskDelay(500 / portTICK_PERIOD_MS);
-	esp_restart();
-
-	return ESP_OK;
-}
-
 static void server_close_fn(httpd_handle_t hd, int sockfd)
 {
     ESP_LOGI(TAG, "client closed %d", sockfd);
@@ -411,12 +410,6 @@ static httpd_handle_t start_webserver(void)
         log_config.method   = HTTP_GET;
         log_config.handler  = log_handler;
         httpd_register_uri_handler(server, &log_config);
-
-        httpd_uri_t restart{};
-        restart.uri	  = "/restart";
-        restart.method   = HTTP_GET;
-        restart.handler  = restart_handler;
-        httpd_register_uri_handler(server, &restart);
 
         #if CONFIG_EXAMPLE_BASIC_AUTH
         httpd_register_basic_auth(server);
