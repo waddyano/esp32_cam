@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -45,6 +46,8 @@ static EventGroupHandle_t s_wifi_event_group;
 
 static const char *TAG = "cam_wifi";
 
+static char g_hostname[32] = "esp_idf";
+static bool connected = true;
 static int s_retry_num = 0;
 
 static unsigned short get_id()
@@ -76,17 +79,18 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
-        if (s_retry_num < CAMERA_ESP_MAXIMUM_RETRY)
+        if (!connected || s_retry_num < CAMERA_ESP_MAXIMUM_RETRY)
         {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
+            ESP_LOGI(TAG, "disconnected: retry to connect to the AP");
         }
         else
         {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
-        ESP_LOGI(TAG,"connect to the AP fail");
+        ESP_LOGI(TAG, "connect to the AP fail %d", connected);
+        connected = false;
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED)
     {
@@ -102,6 +106,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        connected = true;
     }
 }
 
@@ -192,15 +197,42 @@ static esp_err_t wifi_perform_scan()
 
 static esp_event_handler_instance_t instance_any_id;
 static esp_event_handler_instance_t instance_got_ip;
+static esp_netif_t *netif;
 
-void wifi_init_sta(void)
+esp_netif_t *wifi_get_netif()
 {
+    return netif;
+}
+
+void wifi_reconnect() 
+{
+    if (!connected)
+    {
+        ESP_LOGI(TAG, "try to reconnect to wifi");
+        esp_wifi_connect();
+    }
+}
+
+void wifi_init_sta(const char *hostname, bool with_bluetooth)
+{
+    if (hostname != nullptr)
+    {
+        strlcpy(g_hostname, hostname, sizeof(g_hostname));
+    }
+    
     s_wifi_event_group = xEventGroupCreate();
 
     //ESP_ERROR_CHECK(esp_netif_init());
 
     //ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    netif = esp_netif_create_default_wifi_sta();
+    char name[42];
+    snprintf(name, sizeof(name), "%s_%u", g_hostname, get_id());
+    esp_err_t err = esp_netif_set_hostname(netif, name);
+    if (err != ESP_OK)
+    {
+        ESP_LOGI(TAG, "setting hostname err %d", err);
+    }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -234,19 +266,32 @@ void wifi_init_sta(void)
         }
         else
         {
+#ifdef CAMERA_ESP_WIFI_SSID2
             memcpy(wifi_config.sta.password, CAMERA_ESP_WIFI_PASS2, sizeof(CAMERA_ESP_WIFI_PASS2));
+#endif
         }
         /* Setting a password implies station will connect to all security modes including WEP/WPA.
             * However these modes are deprecated and not advisable to be used. Incase your Access point
             * doesn't support WPA2, these mode can be enabled by commenting below line */
-        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        if (strlen((char *)wifi_config.sta.password) == 0)
+        {
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+        }
+        else
+        {
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        }
 
         wifi_config.sta.pmf_cfg.capable = true;
         wifi_config.sta.pmf_cfg.required = false;
 
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
         ESP_ERROR_CHECK(esp_wifi_start() );
-        ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE) );
+
+        if (!with_bluetooth)
+        {
+            ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE) );
+        }
 
         ESP_LOGI(TAG, "wifi_init_sta finished.");
 
@@ -276,6 +321,7 @@ void wifi_init_sta(void)
 
 void wifi_cleanup()
 {
+    connected = false;
     /* The event will not be processed after unregister */
     ESP_ERROR_CHECK(esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, instance_got_ip));
     ESP_ERROR_CHECK(esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, instance_any_id));

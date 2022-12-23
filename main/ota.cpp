@@ -38,10 +38,13 @@ static const char *TAG = "ota";
 
 #define OTA_URL_SIZE 256
 
-const char *update_page = R"!(<html>
+static char title[64] = "Firmware Update";
+
+// Note this has two %s substitutions bot for the title
+static const char *update_page = R"!(<html>
 	<head>
 		<meta http-equiv="content-type" content="text/html; charset=utf-8" />
-		<title>ESP32 Camera Update</title>
+		<title>%s</title>
 		<script>
 function startUpload() {
     var otafile = document.getElementById("otafile").files;
@@ -92,7 +95,7 @@ button:hover{background:#0b73aa;}
 </style>
 	</head>
 	<body>
-		<h1 style="text-align: center">ESP32 Camera Update</h1>
+		<h1 style="text-align: center">%s</h1>
         <div style="margin-left:auto; margin-right: auto; display: table;">
             <div style="padding: 6px">
                 <label for="otafile" class="file">Update firmware:&nbsp</label>
@@ -107,6 +110,7 @@ button:hover{background:#0b73aa;}
 	</body>
 </html>)!";
 
+#if 0
 static esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 {
     switch (evt->event_id) {
@@ -131,9 +135,13 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     case HTTP_EVENT_DISCONNECTED:
         ESP_LOGD(TAG, "HTTP_EVENT_DISCONNECTED");
         break;
+    case HTTP_EVENT_REDIRECT:
+        ESP_LOGD(TAG, "HTTP_EVENT_REDIRECT");
+        break;
     }
     return ESP_OK;
 }
+#endif
 
 static esp_err_t update_handler(httpd_req_t *req)
 {
@@ -154,10 +162,18 @@ static esp_err_t update_handler(httpd_req_t *req)
     {
         return res;
     }
+
     res = httpd_resp_set_hdr(req, "Connection", "close");
-	return httpd_resp_send(req, update_page, strlen(update_page));
+
+    len = strlen(update_page) + 2 * strlen(title) + 1; // bit too big
+    char *page = static_cast<char *>(malloc(len));
+    snprintf(page, len, update_page, title, title);
+	auto err = httpd_resp_send(req, page, strlen(page));
+    free(page);
+    return err;
 }
 
+#if 0
 void simple_ota_example_task(void *pvParameter)
 {
     ESP_LOGI(TAG, "Starting OTA example");
@@ -171,11 +187,13 @@ void simple_ota_example_task(void *pvParameter)
     esp_netif_get_netif_impl_name(netif, ifr.ifr_name);
     ESP_LOGI(TAG, "Bind interface name is %s", ifr.ifr_name);
 #endif
-    esp_http_client_config_t config{};
-    config.url = "http://192.168.10.223:9090/quack.bin";
+    esp_http_client_config_t http_config{};
+    esp_https_ota_config_t ota_config{};
+    ota_config.http_config = &http_config;
+    http_config.url = "http://192.168.10.223:9090/quack.bin";
     //config.cert_pem = (char *)server_cert_pem_start;
-    config.event_handler = _http_event_handler;
-    config.keep_alive_enable = true;
+    http_config.event_handler = _http_event_handler;
+    http_config.keep_alive_enable = true;
 #ifdef CONFIG_EXAMPLE_FIRMWARE_UPGRADE_BIND_IF
         .if_name = &ifr,
 #endif
@@ -198,7 +216,7 @@ void simple_ota_example_task(void *pvParameter)
     config.skip_cert_common_name_check = true;
 #endif
 
-    esp_err_t ret = esp_https_ota(&config);
+    esp_err_t ret = esp_https_ota(&ota_config);
     if (ret == ESP_OK) {
         esp_restart();
     } else {
@@ -206,6 +224,7 @@ void simple_ota_example_task(void *pvParameter)
     }
     vTaskDelete(nullptr);
 }
+#endif
 
 static const char *hex = "0123456789abcdef";
 

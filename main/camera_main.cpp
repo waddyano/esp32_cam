@@ -9,16 +9,11 @@
 #include <stdio.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "soc/rtc.h"
 #include "esp_system.h"
 #include "esp_spi_flash.h"
 #include "esp_camera.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
-#include "esp_netif.h"
-#include "esp_ota_ops.h"
-#include "esp_partition.h"
 #include "esp_sntp.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -30,6 +25,7 @@
 #include "lwip/sockets.h"
 #include "ota.h"
 #include "sse.h"
+#include "status.h"
 #include "wifi.h"
 
 #include <esp_http_server.h>
@@ -48,28 +44,15 @@ static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %
 static esp_err_t stream_handler(httpd_req_t *req);
 static esp_err_t still_handler(httpd_req_t *req);
 
-static char page_buf[1536];
-static int buf_offset;
-
 static unsigned int persistent_flags;
 
-static int buf_printf(const char *format, ...)
+void status_extra_info_function(int (*printfn)(const char *format, ...))
 {
-    if (buf_offset >= sizeof(page_buf) - 1)
+    auto s = esp_camera_sensor_get();
+    if (s != nullptr)
     {
-        return -1;
+        printfn("Camera: vflip %d hflip %d\n", s->status.vflip, s->status.hmirror);
     }
-    va_list ap;
-    va_start(ap, format);
-    int left = sizeof(page_buf) - buf_offset;
-    int n = vsnprintf(page_buf + buf_offset, left, format, ap);
-    va_end(ap);
-    if (n > 0)
-    {
-        buf_offset += n > left ? left - 1 : n;
-    }
-
-    return n;
 }
 
 static esp_err_t get_saved_flags()
@@ -106,107 +89,11 @@ static esp_err_t set_saved_flags()
     return ESP_OK;
 }
 
-static void print_chip_info(int (*printfn)(const char *format, ...))
-{
-    esp_chip_info_t chip_info;
-    esp_chip_info(&chip_info);
-    printfn("This is %s chip with %d CPU core(s), WiFi%s%s, ",
-            CONFIG_IDF_TARGET,
-            chip_info.cores,
-            (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
-            (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
-
-    printfn("silicon revision %d, ", chip_info.revision);
-
-    rtc_cpu_freq_config_t config;
-    rtc_clk_cpu_freq_get_config(&config);
-    printfn("freq %d, ", config.freq_mhz);
-
-    printfn("%dMB %s flash\n", spi_flash_get_chip_size() / (1024 * 1024),
-            (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
-
-    uint8_t mac[6];
-    esp_efuse_mac_get_default(mac);
-    printfn("MAC %02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-    const char *name;
-    esp_err_t err = tcpip_adapter_get_hostname(TCPIP_ADAPTER_IF_STA, &name);
-    if (err == ESP_OK)
-    {
-        printfn("hostname: %s\n", name);
-    }
-    else
-    {
-        printfn("get hostname err: %d\n", err);
-    }
-
-    if (wifi_ssid[0] != '\0')
-    {
-        printfn("Wifi: %s\n", wifi_ssid);
-    }
-    printfn("Minimum free heap size: %d bytes\n", esp_get_minimum_free_heap_size());
-
-    multi_heap_info_t info;
-	heap_caps_get_info(&info, MALLOC_CAP_SPIRAM);
-	size_t tot = info.total_free_bytes + info.total_allocated_bytes;
-    printfn("%zd psram\n", tot);
-
-    int64_t uptime = esp_timer_get_time();
-    int64_t secs = uptime / 1000000;
-    int64_t mins = secs / 60;
-    secs %= 60;
-    int64_t hours = mins / 60;
-    mins %= 60;
-    int64_t days = hours / 24;
-    hours %= 24;
-    printfn("Uptime: %d days %d hours %d mins %d secs\n", (int)days, (int)hours, (int)mins, (int)secs);
-    auto s = esp_camera_sensor_get();
-    if (s != nullptr)
-    {
-        printfn("Camera: vflip %d hflip %d\n", s->status.vflip, s->status.hmirror);
-    }
-    
-    esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
-    for (; it != nullptr; it = esp_partition_next(it)) 
-    {
-        const esp_partition_t *p = esp_partition_get(it);
-        printfn("partition: %s %d %d %x %x\n", p->label, p->type, p->subtype, p->address, p->size);
-    }
-    esp_partition_iterator_release(it);
-
-    const esp_partition_t *partition = esp_ota_get_running_partition();
-    printfn("Currently running partition: %s\n", partition->label);
-    char boot_hash[65], current_hash[65];
-    ota_get_partition_hashes(boot_hash, current_hash);
-    printfn("boot sha256: %s\n", boot_hash);
-    printfn("current partition sha256: %s\n", current_hash);
-    int nTasks = uxTaskGetNumberOfTasks();
-    printfn("%d tasks\n", nTasks);
-    char *buf = static_cast<char*>(malloc(50 * nTasks));
-    vTaskList(buf);
-    printfn("%s\n", buf);
-    free(buf);
-}
 
 static void set_led(bool on)
 {
     led_state = on;
     gpio_set_level(LED_PIN, (int)led_state);
-}
-
-static esp_err_t status_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "status req: %p", * (void **)req->aux);
-    buf_offset = 0;
-    buf_printf("<html><body><a href=\".\">Home</a><br/><pre style=\"font-size: 1.2rem\">\n");
-    print_chip_info(buf_printf);    
-    buf_printf("</pre></body></html>\n");
-    esp_err_t res = httpd_resp_set_type(req, "text/html");
-    if(res != ESP_OK){
-        return res;
-    }
-    res = httpd_resp_set_hdr(req, "Connection", "close");
-	return httpd_resp_send(req, page_buf, buf_offset);
 }
 
 static esp_err_t log_handler(httpd_req_t *req)
@@ -320,6 +207,12 @@ static esp_err_t config_handler(httpd_req_t *req)
                 int level = atoi(param);
                 s->set_brightness(s, level);
             }
+            else if (httpd_query_key_value(buf, "effect", param, sizeof(param)) == ESP_OK) 
+            {
+                ESP_LOGI(TAG, "Found URL query parameter => effect=%s", param);
+                int effect = atoi(param);
+                s->set_special_effect(s, effect);
+            }
         }
         free(buf);
     }    
@@ -367,11 +260,7 @@ static httpd_handle_t start_webserver(void)
         index.handler   = index_handler;
         httpd_register_uri_handler(server, &index);
 
-        httpd_uri_t status{};
-        status.uri       = "/status";
-        status.method    = HTTP_GET;
-        status.handler   = status_handler;
-        httpd_register_uri_handler(server, &status);
+        status_add_endpoints(server);
 
         httpd_uri_t stream{};
         stream.uri       = "/stream";
@@ -427,7 +316,7 @@ extern "C" void app_main(void)
     gpio_pad_select_gpio(LED_PIN); 
     gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT); 
     set_led(true);
-    print_chip_info(printf);
+    status_print_info(printf);
 
     esp_err_t err =  nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -445,7 +334,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     ESP_LOGI(TAG, "start up wifi");
-    wifi_init_sta();
+    wifi_init_sta("esp_camera", false);
 
     ESP_LOGI(TAG, "start up camera");
     camera_init();
@@ -465,7 +354,7 @@ extern "C" void app_main(void)
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "pool.ntp.org");
     sntp_init();
-    setenv("TZ", "PDT+07", 1);
+    setenv("TZ", "PST8PDT,M3.2.0,M11.1.0", 1);
     tzset();
     sntp_set_time_sync_notification_cb([](timeval *tv)
         { 
@@ -487,6 +376,11 @@ extern "C" void app_main(void)
     set_led(false);
     httpd_handle_t handle = start_webserver();
     ESP_LOGI(TAG, "started webserver %p", handle);
+    for (;;)
+    {
+        wifi_reconnect();
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
 }
 
 typedef struct
