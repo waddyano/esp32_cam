@@ -1,12 +1,26 @@
+#include "camera.h"
 #include "index.h"
 
-const char *index_page = R"!(<html>
+static const char index_page_head[] = R"!(<html>
 	<head>
 		<meta http-equiv="content-type" content="text/html; charset=utf-8" />
         <!-- <meta name="viewport" content="width=device-width, initial-scale=1.0"/> -->
-		<title>ESP32 Camera</title>
-        <script>
+		<title>%s</title>
+        <script>)!";
 
+const char *get_index_page_head()
+{
+    static char tmp[sizeof(index_page_head) + sizeof(camera_name)];
+    const char *n = camera_name;
+    if (n[0] == '\0')
+    {
+        n = "ESP32 Camera";
+    }
+    snprintf(tmp, sizeof(tmp), index_page_head, n);
+    return tmp;
+}
+
+const char *index_page_body = R"!(
 var eventSource = null;
 
 function getString(dv, offset, length){
@@ -103,6 +117,7 @@ function loaded()
 {
     status_button.href = rel_url('status');
     update_button.href = rel_url('update');
+    pagehead.innerHTML = document.title;
     snap();
 }
 function snap()
@@ -258,7 +273,7 @@ label.sl { vertical-align: bottom; }
         </style>
 	</head>
 	<body onload="loaded()">
-		<h1>ESP32 Camera</h1>
+		<h1 id="pagehead">ESP32 Camera</h1>
         <table class="tabcenter"><tr>
             <td><button onclick="snap()">Still</button></td>
             <td><button onclick="stream()">Stream</button></td>

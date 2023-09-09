@@ -2,6 +2,7 @@
 #include "camera.h"
 #include "httpd_util.h"
 #include "sse.h"
+#include "temp.h"
 #include <time.h>
 
 #include "freertos/timers.h"
@@ -144,7 +145,9 @@ static void time_ticker(TimerHandle_t arg)
     char buf[128];
     unsigned int frames = camera_get_frame_count(true);
 
-    if (snprintf(buf, sizeof(buf), "{ \"time\": \"%4d:%02d:%02d-%02d:%02d:%02d\", \"frames\": %u }", 1900 + t.tm_year, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec, frames) > 0)
+    float celsius = temp_read();
+    if (snprintf(buf, sizeof(buf), "{ \"time\": \"%4d:%02d:%02d-%02d:%02d:%02d\", \"frames\": %u, \"tempc\": %.2g }", 
+                1900 + t.tm_year, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec, frames, celsius) > 0)
     {
         sse_broadcast("status", buf, strlen(buf));
     }
@@ -181,6 +184,5 @@ esp_err_t sse_init()
     ESP_LOGI(TAG, "initialized time timer %p", handle);
     stat = xTimerStart(time_handle, 0);
     ESP_LOGI(TAG, "time timer started %d", stat);
- 
     return ESP_OK;
 }

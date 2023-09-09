@@ -1,7 +1,9 @@
 #include "esp_camera.h"
 #include "esp_log.h"
 
-#define AITHINKER 1
+//#define AITHINKER 1
+//#define XIAOESP32S3 1
+#define FREENOVEESP32S3 1
 
 //WROVER-KIT PIN Map
 #ifdef WROVER
@@ -43,6 +45,46 @@
 #define CAM_PIN_HREF 23
 #define CAM_PIN_PCLK 22
 #endif
+#ifdef XIAOESP32S3
+#define CAM_PIN_PWDN -1
+#define CAM_PIN_RESET -1 //software reset will be performed
+#define CAM_PIN_XCLK 10
+#define CAM_PIN_SIOD 40
+#define CAM_PIN_SIOC 39
+
+#define CAM_PIN_D7 48
+#define CAM_PIN_D6 11
+#define CAM_PIN_D5 12
+#define CAM_PIN_D4 14
+#define CAM_PIN_D3 16
+#define CAM_PIN_D2 18
+#define CAM_PIN_D1 17
+#define CAM_PIN_D0 15
+
+#define CAM_PIN_VSYNC 38
+#define CAM_PIN_HREF 47
+#define CAM_PIN_PCLK 13
+#endif
+#ifdef FREENOVEESP32S3
+#define CAM_PIN_PWDN -1
+#define CAM_PIN_RESET -1 //software reset will be performed
+#define CAM_PIN_XCLK 15
+#define CAM_PIN_SIOD 4
+#define CAM_PIN_SIOC 5
+
+#define CAM_PIN_D7 16
+#define CAM_PIN_D6 17
+#define CAM_PIN_D5 18
+#define CAM_PIN_D4 12
+#define CAM_PIN_D3 10
+#define CAM_PIN_D2 8
+#define CAM_PIN_D1 9
+#define CAM_PIN_D0 11
+
+#define CAM_PIN_VSYNC 6
+#define CAM_PIN_HREF 7
+#define CAM_PIN_PCLK 13
+#endif
 
 #define TAG "camera"
 
@@ -51,8 +93,8 @@ esp_err_t camera_init(){
     camera_config.pin_pwdn  = CAM_PIN_PWDN;
     camera_config.pin_reset = CAM_PIN_RESET;
     camera_config.pin_xclk = CAM_PIN_XCLK;
-    camera_config.pin_sscb_sda = CAM_PIN_SIOD;
-    camera_config.pin_sscb_scl = CAM_PIN_SIOC;
+    camera_config.pin_sccb_sda = CAM_PIN_SIOD;
+    camera_config.pin_sccb_scl = CAM_PIN_SIOC;
 
     camera_config.pin_d7 = CAM_PIN_D7;
     camera_config.pin_d6 = CAM_PIN_D6;
@@ -70,6 +112,9 @@ esp_err_t camera_init(){
     // Suggested changing this improved wifi performance - 18Mhz appears to work so not sure what the constraints on values are
     // but this is much better for me
     camera_config.xclk_freq_hz = 18000000;//EXPERIMENTAL: Set to 16MHz on ESP32-S2 or ESP32-S3 to enable EDMA mode
+#if defined(FREENOVEESP32S3) || defined(XIAOESP32S3)
+    camera_config.xclk_freq_hz = 22000000;
+#endif
     camera_config.ledc_timer = LEDC_TIMER_0;
     camera_config.ledc_channel = LEDC_CHANNEL_0;
 

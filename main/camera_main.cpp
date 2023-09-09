@@ -14,6 +14,7 @@
 #include "esp_camera.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
+#include "esp_netif.h"
 #include "esp_sntp.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -22,15 +23,17 @@
 #include "camera.h"
 #include "httpd_util.h"
 #include "index.h"
+#include "rom/gpio.h"
 #include "lwip/sockets.h"
 #include "ota.h"
 #include "sse.h"
 #include "status.h"
+#include "temp.h"
 #include "wifi.h"
 
 #include <esp_http_server.h>
 
-const gpio_num_t LED_PIN = GPIO_NUM_4;
+const gpio_num_t LED_PIN = GPIO_NUM_21; //GPIO_NUM_4;
 static bool led_state = false;
 
 #define TAG "camera"
@@ -44,7 +47,8 @@ static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %
 static esp_err_t stream_handler(httpd_req_t *req);
 static esp_err_t still_handler(httpd_req_t *req);
 
-static unsigned int persistent_flags;
+static uint32_t persistent_flags;
+char camera_name[32];
 
 void status_extra_info_function(int (*printfn)(const char *format, ...))
 {
@@ -53,9 +57,20 @@ void status_extra_info_function(int (*printfn)(const char *format, ...))
     {
         printfn("Camera: vflip %d hflip %d\n", s->status.vflip, s->status.hmirror);
     }
+
+    if (camera_name[0] != '\0')
+    {
+        printfn("Camera: name %s\n", camera_name);
+    }
+
+    float temp = temp_read();
+    if (temp > 0)
+    {
+        printfn("Chip temperature %3.1f C\n", temp);
+    }
 }
 
-static esp_err_t get_saved_flags()
+static esp_err_t get_saved_prefs()
 {
     nvs_handle_t nvs_handle;
 
@@ -66,8 +81,13 @@ static esp_err_t get_saved_flags()
         return err;
     }
 
+    persistent_flags = 0;
     err = nvs_get_u32(nvs_handle, "flags", &persistent_flags);
-    ESP_LOGI(TAG, "read saved flags %u, err %d", persistent_flags, err);
+    ESP_LOGI(TAG, "read saved flags %lu, err %d", persistent_flags, err);
+    size_t namelen = sizeof(camera_name);
+    camera_name[0] = '\0';
+    nvs_get_str(nvs_handle, "name", camera_name, &namelen);
+    ESP_LOGI(TAG, "read saved name %s, err %d", camera_name, err);
     nvs_close(nvs_handle);
 
     return ESP_OK;
@@ -84,11 +104,26 @@ static esp_err_t set_saved_flags()
     }
 
     err = nvs_set_u32(nvs_handle, "flags", persistent_flags);
-    ESP_LOGI(TAG, "save saved flags %u, err %d", persistent_flags, err);
+    ESP_LOGI(TAG, "save saved flags %lu, err %d", persistent_flags, err);
     nvs_close(nvs_handle);
     return ESP_OK;
 }
 
+static esp_err_t set_saved_name()
+{
+    nvs_handle_t nvs_handle;
+
+    esp_err_t err = nvs_open("camera", NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = nvs_set_str(nvs_handle, "name", camera_name);
+    ESP_LOGI(TAG, "save saved name %s, err %d", camera_name, err);
+    nvs_close(nvs_handle);
+    return ESP_OK;
+}
 
 static void set_led(bool on)
 {
@@ -195,6 +230,15 @@ static esp_err_t config_handler(httpd_req_t *req)
                 persistent_flags = (persistent_flags & ~2u) | ((s->status.hmirror != 0) << 1);
                 set_saved_flags();
             }
+            else if (httpd_query_key_value(buf, "name", param, sizeof(param)) == ESP_OK) 
+            {
+                ESP_LOGI(TAG, "Found URL query parameter => name=%s", param);
+                if (strlen(param) < sizeof(camera_name))
+                {
+                    strcpy(camera_name, param);
+                    set_saved_name();
+                }
+            }
             else if (httpd_query_key_value(buf, "contrast", param, sizeof(param)) == ESP_OK) 
             {
                 ESP_LOGI(TAG, "Found URL query parameter => contrast=%s", param);
@@ -226,7 +270,19 @@ static esp_err_t index_handler(httpd_req_t *req)
         return res;
     }
     res = httpd_resp_set_hdr(req, "Connection", "close");
-	return httpd_resp_send(req, index_page, strlen(index_page));
+    const char *head = get_index_page_head();
+    res = httpd_resp_send_chunk(req, head, HTTPD_RESP_USE_STRLEN);
+    if (res != ESP_OK)
+    {
+        return res;
+    }
+    const char *body = index_page_body;
+	res = httpd_resp_send_chunk(req, body, HTTPD_RESP_USE_STRLEN);
+    if (res != ESP_OK)
+    {
+        return res;
+    }
+    return httpd_resp_send_chunk(req, nullptr, 0);
 }
 
 static void server_close_fn(httpd_handle_t hd, int sockfd)
@@ -239,7 +295,7 @@ static void server_close_fn(httpd_handle_t hd, int sockfd)
 
 static httpd_handle_t start_webserver(void)
 {
-    esp_log_level_set("httpd_parse", ESP_LOG_DEBUG);  
+    //esp_log_level_set("httpd_parse", ESP_LOG_DEBUG);  
     sse_init();
     
     httpd_handle_t server = NULL;
@@ -339,7 +395,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "start up camera");
     camera_init();
 
-    if (get_saved_flags() == ESP_OK)
+    if (get_saved_prefs() == ESP_OK)
     {
         auto s = esp_camera_sensor_get();
         if (s != nullptr)
@@ -351,9 +407,9 @@ extern "C" void app_main(void)
 
     ota_mark_valid();
 
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, "pool.ntp.org");
-    sntp_init();
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_init();
     setenv("TZ", "PST8PDT,M3.2.0,M11.1.0", 1);
     tzset();
     sntp_set_time_sync_notification_cb([](timeval *tv)
@@ -368,12 +424,17 @@ extern "C" void app_main(void)
                 buf[len - 1] = '\0';
             }
             ESP_LOGI(TAG, "Time synchronized %s", buf);
+            if (status_first_sntp_sync.tv_sec == 0)
+            {
+                status_first_sntp_sync.tv_sec = tv->tv_sec;
+            }
 
         });
 
     //int ret = xTaskCreatePinnedToCore(thread_routine, name, stacksize, arg, prio, thread, core_id);
 
     set_led(false);
+    temp_init();
     httpd_handle_t handle = start_webserver();
     ESP_LOGI(TAG, "started webserver %p", handle);
     for (;;)
@@ -431,7 +492,7 @@ static esp_err_t send_jpeg_as_exif(httpd_handle_t hd, int fd, const char *buf, s
     localtime_r(&now, &t);
     if (snprintf(tmp_header + 50, 20, "%4d:%02d:%02d %02d:%02d:%02d", 1900 + t.tm_year, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec) > 0)
     {
-        ESP_LOGI(TAG, "timestamp %s", tmp_header + 50);
+        ESP_LOGI(TAG, "image timestamp %s", tmp_header + 50);
     }
     memcpy(tmp_header + 88, tmp_header + 50, 20);
     esp_err_t res = socket_send_all(hd, fd, tmp_header, sizeof(exif_header));
@@ -503,7 +564,7 @@ static esp_err_t still_handler(httpd_req_t *req)
 
     esp_camera_fb_return(fb);
     int64_t fr_end = esp_timer_get_time();
-    ESP_LOGI(TAG, "JPG: %ub %ums", fb_len, (uint32_t)((fr_end - fr_start)/1000));
+    ESP_LOGI(TAG, "JPG: %ub %lums", fb_len, (uint32_t)((fr_end - fr_start)/1000));
     return res;
 }
 
@@ -536,7 +597,8 @@ unsigned int camera_get_frame_count(bool reset)
 static void send_next_frame(void *data)
 {
     async_frame_resp *afr = static_cast<async_frame_resp *>(data);
-    ESP_LOGI(TAG, "stream next frame: %d", afr->fd);
+    int64_t grab_start = esp_timer_get_time();
+    ESP_LOGI(TAG, "@%lld: stream next frame: %d", grab_start / 1000, afr->fd);
 
     camera_fb_t * fb = esp_camera_fb_get();
     if (fb == nullptr)
@@ -606,7 +668,7 @@ static void send_next_frame(void *data)
     int64_t send_end = esp_timer_get_time();
     int64_t send_time = send_end - send_start;
     int64_t rate = (jpg_buf_len * 1000000ll) / send_time;
-    ESP_LOGI(TAG, "Send rate %d bps %d in %d", (int32_t)rate, jpg_buf_len, (int32_t)send_time);
+    ESP_LOGI(TAG, "@%lld: Send rate %ld bps %d in %ld.%03ld ms", send_end / 1000, (int32_t)rate, jpg_buf_len, (int32_t)(send_time / 1000), (int32_t)(send_time % 1000));
     if (fb->format != PIXFORMAT_JPEG)
     {
         free(jpg_buf);
@@ -625,7 +687,7 @@ static void send_next_frame(void *data)
     int64_t frame_time = fr_end - afr->last_frame_time;
     afr->last_frame_time = fr_end;
     frame_time /= 1000;
-    ESP_LOGI(TAG, "MJPG: fd %d: %uKB %ums (%.1ffps)", afr->fd, (uint32_t)(jpg_buf_len/1024), (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
+    ESP_LOGI(TAG, "MJPG: fd %d: %luKB %lums (%.1ffps)", afr->fd, (uint32_t)(jpg_buf_len/1024), (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
     httpd_queue_work(afr->hd, send_next_frame, afr);
 }
 

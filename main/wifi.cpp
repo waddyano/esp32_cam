@@ -48,6 +48,7 @@ static const char *TAG = "cam_wifi";
 
 static char g_hostname[32] = "esp_idf";
 static bool connected = true;
+static bool do_reconnect = false;
 static int s_retry_num = 0;
 
 static unsigned short get_id()
@@ -67,14 +68,16 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
     {
-        char name[18];
-        snprintf(name, sizeof(name), "esp_camera_%u", get_id());
-        esp_err_t err = tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, name);
+        #if 0
+        char name[42];
+        snprintf(name, sizeof(name), "%s_%u", g_hostname, get_id());
+        //esp_err_t err = tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, name);
+        esp_err_t err = esp_netif_set_hostname()
         if (err != ESP_OK)
         {
             ESP_LOGI(TAG, "setting hostname err %d", err);
         }
-
+        #endif
         esp_wifi_connect();
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
@@ -83,18 +86,18 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI(TAG, "disconnected: retry to connect to the AP");
+            ESP_LOGI(TAG, "retry to connect to the AP %s", wifi_ssid);
         }
         else
         {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
-        ESP_LOGI(TAG, "connect to the AP fail %d", connected);
+        ESP_LOGI(TAG,"connect to AP %s fail %d", wifi_ssid, connected);
         connected = false;
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED)
     {
-        ESP_LOGI(TAG, "wifi connected");
+        ESP_LOGI(TAG, "wifi connected to %s", wifi_ssid);
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE)
     {
@@ -112,15 +115,15 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 
 static esp_err_t wifi_perform_scan()
 {
-    wifi_scan_config_t scan_config{};
-
     for (;;)
     {
+        wifi_scan_config_t scan_config{};
+
         esp_err_t err = esp_wifi_scan_start(&scan_config, true);
         if (err != ESP_OK)
         {
             ESP_LOGI(TAG, "Failed to start wifi scan %s %d",  esp_err_to_name(err), err);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
             continue;
         }
 
@@ -128,6 +131,7 @@ static esp_err_t wifi_perform_scan()
         esp_wifi_scan_get_ap_num(&scan_ap_num);
         if (scan_ap_num == 0) {
             ESP_LOGI(TAG, "No matching APs found in scan");
+            esp_wifi_scan_stop();
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             continue;
         }
@@ -206,7 +210,7 @@ esp_netif_t *wifi_get_netif()
 
 void wifi_reconnect() 
 {
-    if (!connected)
+    if (!connected && do_reconnect)
     {
         ESP_LOGI(TAG, "try to reconnect to wifi");
         esp_wifi_connect();
@@ -237,6 +241,12 @@ void wifi_init_sta(const char *hostname, bool with_bluetooth)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
+    err = esp_wifi_restore();
+    if (err != ESP_OK)
+    {
+        ESP_LOGI(TAG, "wifi restore err %d", err);
+    }
+    
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
                                                         &event_handler,
@@ -316,6 +326,8 @@ void wifi_init_sta(const char *hostname, bool with_bluetooth)
         } else {
             ESP_LOGE(TAG, "UNEXPECTED EVENT");
         }
+
+        do_reconnect = true;
     }
 }
 
