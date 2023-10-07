@@ -1,9 +1,12 @@
 #include "esp_camera.h"
 #include "esp_log.h"
 
-//#define AITHINKER 1
+#ifdef CONFIG_IDF_TARGET_ESP32
+#define AITHINKER 1
+#else
 //#define XIAOESP32S3 1
 #define FREENOVEESP32S3 1
+#endif
 
 //WROVER-KIT PIN Map
 #ifdef WROVER

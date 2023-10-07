@@ -704,7 +704,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    const char *httpd_hdr_str = "HTTP/1.1 200 ok\r\nContent-Type: " _STREAM_CONTENT_TYPE "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+    const char *httpd_hdr_str = "HTTP/1.1 200 ok\r\nContent-Type: " _STREAM_CONTENT_TYPE "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
     auto res = send_all(afr, httpd_hdr_str, strlen(httpd_hdr_str));
     if (res != ESP_OK)
     {
