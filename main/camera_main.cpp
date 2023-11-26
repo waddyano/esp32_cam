@@ -21,6 +21,7 @@
 #include "nvs_flash.h"
 
 #include "camera.h"
+#include "favicon.h"
 #include "httpd_util.h"
 #include "index.h"
 #include "rom/gpio.h"
@@ -160,6 +161,16 @@ static esp_err_t led_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "LED is now %s", state);
     sse_broadcast("led", state, strlen(state));
     return httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t name_handler(httpd_req_t *req)
+{
+    esp_err_t res = httpd_resp_set_type(req, "text/plain");
+    if (res != ESP_OK)
+    {
+        return res;
+    }
+    return httpd_resp_send(req, camera_name, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t config_handler(httpd_req_t *req)
@@ -317,6 +328,7 @@ static httpd_handle_t start_webserver(void)
         httpd_register_uri_handler(server, &index);
 
         status_add_endpoints(server);
+        favicon_add_endpoint(server);
 
         httpd_uri_t stream{};
         stream.uri       = "/stream";
@@ -335,6 +347,12 @@ static httpd_handle_t start_webserver(void)
         still.method    = HTTP_GET,
         still.handler   = still_handler,
         httpd_register_uri_handler(server, &still);
+
+        httpd_uri_t name{};
+        name.uri       = "/name";
+        name.method    = HTTP_GET,
+        name.handler   = name_handler,
+        httpd_register_uri_handler(server, &name);
 
         ota_add_endpoints(server);
 

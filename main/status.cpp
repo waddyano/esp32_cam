@@ -148,7 +148,8 @@ static esp_err_t status_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "status req: %p", * (void **)req->aux);
     buf_offset = 0;
-    buf_printf("<html><body><a href=\".\">Home</a><br/><pre style=\"font-size: 1.2rem\">\n");
+    buf_printf("<html><head><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\" /><link rel=\"icon\" href=\"favicon.ico\" type=\"image/x-icon\" /></head>");
+    buf_printf("<body><a href=\".\">Home</a><br/><pre style=\"font-size: 1.2rem\">\n");
     status_print_info(buf_printf);    
     buf_printf("</pre></body></html>\n");
     esp_err_t res = httpd_resp_set_type(req, "text/html");

@@ -44,6 +44,7 @@ static char title[64] = "Firmware Update";
 static const char *update_page = R"!(<html>
 	<head>
 		<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+        <link rel="icon" href="favicon.ico" type="image/x-icon" />
 		<title>%s</title>
 		<script>
 function startUpload() {
@@ -272,6 +273,8 @@ void ota_send_reboot_page(httpd_req_t *req, const char *msg)
     const char *head = R"!(
 <html>
 <head>
+	<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+    <link rel="icon" href="favicon.ico" type="image/x-icon" />
 	<title>Rebooting</title>
     <script>
         const id = setInterval(ping, 5000);

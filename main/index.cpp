@@ -4,6 +4,7 @@
 static const char index_page_head[] = R"!(<html>
 	<head>
 		<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+        <link rel="icon" href="favicon.ico" type="image/x-icon" />
         <!-- <meta name="viewport" content="width=device-width, initial-scale=1.0"/> -->
 		<title>%s</title>
         <script>)!";
@@ -115,10 +116,13 @@ function rel_url(u)
 
 function loaded()
 {
+    let link = document.querySelector("link[rel~='icon']");
+    link.href = rel_url('favicon.ico');
     status_button.href = rel_url('status');
     update_button.href = rel_url('update');
     pagehead.innerHTML = document.title;
     snap();
+    fetch(rel_url('name')).then((response) => { return response.text(); }).then((text) => { cameraName.value = text; });
 }
 function snap()
 {
@@ -195,6 +199,14 @@ function restart()
     imagepanel.innerHTML='Restarting';
     window.location.href = rel_url('restart');
 }
+function setname()
+{
+    fetch(rel_url('config') + '?name=' + cameraName.value).
+        then((resp) =>
+            {
+                fetch(rel_url('name')).then((r) => { return r.text(); }).then((text) => { cameraName.value = text; document.title = text; pagehead.innerHTML = text; });
+            });
+}
 function refresh()
 {
     if (imagepanel.innerHTML != '' && image.src.startsWith("blob:"))
@@ -263,6 +275,7 @@ h1 { text-align: center; }
 .center { max-width: 100%; max-height: 100vh; margin: auto; }
 button { border: 0; border-radius: 0.3rem; background:#1fa3ec; color:#ffffff; line-height:2.4rem; font-size:1.2rem; width:180px;
 -webkit-transition-duration:0.4s;transition-duration:0.4s;cursor:pointer;}
+#cameraName { line-height:2.4rem; font-size:1.2rem; width:180px; }
 button:hover{background:#0b73aa;}
 .cb { border: 0; border-radius: 0.3rem; font-family: arial, sans-serif; color: black; line-height:2.4rem; font-size:1.2rem;}
 input[type=checkbox] { height:1.2rem; width: 1.2rem;}
@@ -291,6 +304,8 @@ label.sl { vertical-align: bottom; }
             <td><a id="status_button"><button type="button">Status</button></a></td>
             <td><a id="update_button"><button type="button">Update</button></a></td>
             <td><button onclick="restart()">Restart</button></td>
+            <td><button onclick="setname()">Set Name:</button></td>
+            <td><input type="text" id="cameraName" name="cameraName"></td>
         </tr><tr id="size">
             <td><button onclick="framesize('cif')">CIF</button></td>
             <td><button onclick="framesize('vga')">VGA</button></td>
