@@ -1,6 +1,7 @@
 #include <esp_log.h>
 #include "camera.h"
 #include "httpd_util.h"
+#include "lwip/sockets.h"
 #include "sse.h"
 #include "temp.h"
 #include <time.h>
@@ -21,8 +22,8 @@ static async_event_resp *sinks[CONFIG_LWIP_MAX_SOCKETS];
 
 esp_err_t sse_handler(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "sse req: %d", httpd_req_to_sockfd(req));
     auto *aer = static_cast<async_event_resp*>(malloc(sizeof(struct async_event_resp)));
+    ESP_LOGI(TAG, "sse req: %d aer: %p", httpd_req_to_sockfd(req), aer);
     aer->hd = req->handle;
     aer->fd = httpd_req_to_sockfd(req);
     if (aer->fd < 0) 
@@ -30,6 +31,9 @@ esp_err_t sse_handler(httpd_req_t *req)
         free(aer);
         return ESP_FAIL;
     }
+
+    int one = 1;
+    setsockopt(aer->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
     const char *httpd_hdr_str = "HTTP/1.1 200 ok\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n";
     auto res = socket_send_all(req->handle, aer->fd, httpd_hdr_str, strlen(httpd_hdr_str));
@@ -57,7 +61,7 @@ esp_err_t sse_handler(httpd_req_t *req)
     return res;
 }
 
-void sse_remove_sink(int fd)
+bool sse_remove_sink(int fd)
 {
     bool found = false;
     async_event_resp *aer = nullptr;
@@ -76,15 +80,23 @@ void sse_remove_sink(int fd)
     xSemaphoreGive(mutex);
     if (found)
     {
+        ESP_LOGI(TAG, "Freeing aer %p", aer);
         free(aer);
     }
+    return found;
 }
 
 static const char heartbeat_msg[] = ": heartbeat\n\n";
 
 static void send_heartbeat(void *data)
 {
-    async_event_resp *aer = static_cast<async_event_resp *>(data);
+    async_event_resp *aer = *static_cast<async_event_resp **>(data);
+    if (aer == nullptr)
+    {
+        ESP_LOGI(TAG, "send heartbeat: client has been deleted");
+        return;
+    }
+
     ESP_LOGI(TAG, "send heartbeat: %d", aer->fd);
 
     auto res = socket_send_chunk(aer->hd, aer->fd, heartbeat_msg, sizeof(heartbeat_msg) - 1);
@@ -100,8 +112,15 @@ static int sse_id = 0;
 
 static void send_message(void *data)
 {
-    async_event_resp *aer = static_cast<async_event_resp *>(data);
-    ESP_LOGI(TAG, "send message to: %d: %s", aer->fd, current_broadcast);
+    async_event_resp *aer = *static_cast<async_event_resp **>(data);
+
+    if (aer == nullptr)
+    {
+        ESP_LOGI(TAG, "sink %d has been deleted", static_cast<async_event_resp **>(data)-sinks);
+        return;
+    }
+
+    ESP_LOGI(TAG, "send message to: %p %d:  on core %d %s", aer, aer->fd, xPortGetCoreID(), current_broadcast);
 
     auto res = socket_send_chunk(aer->hd, aer->fd, current_broadcast, strlen(current_broadcast));
     if (res != ESP_OK)
@@ -126,7 +145,7 @@ void sse_broadcast(const char *type, const char *data, unsigned int len)
     {
         if (sinks[i] != nullptr)
         {
-            esp_err_t res = httpd_queue_work(sinks[i]->hd, send_message, sinks[i]);
+            esp_err_t res = httpd_queue_work(sinks[i]->hd, send_message, sinks + i);
             if (res != ESP_OK)
             {
                 ESP_LOGI(TAG, "Queuing sse broadcast work failed : %d", res);
@@ -161,7 +180,7 @@ static void ticker(TimerHandle_t arg)
     {
         if (sinks[i] != nullptr)
         {
-            esp_err_t res = httpd_queue_work(sinks[i]->hd, send_heartbeat, sinks[i]);
+            esp_err_t res = httpd_queue_work(sinks[i]->hd, send_heartbeat, sinks + i);
             if (res != ESP_OK)
             {
                 ESP_LOGI(TAG, "Queuing work failed : %d", res);

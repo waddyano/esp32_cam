@@ -271,9 +271,9 @@ body, textarea, button {font-family: arial, sans-serif;}
 #datewrapper { text-align:center; }
 #imagepanel { display: grid; height: auto; }
 h1 { text-align: center; }
-.tabcenter { margin-left: auto; margin-right: auto; }
+.tabcenter { margin-left: auto; margin-right: auto; table-layout: fixed; width: 100%; max-width: 1200px; }
 .center { max-width: 100%; max-height: 100vh; margin: auto; }
-button { border: 0; border-radius: 0.3rem; background:#1fa3ec; color:#ffffff; line-height:2.4rem; font-size:1.2rem; width:180px;
+button { border: 0; border-radius: 0.3rem; background:#1fa3ec; color:#ffffff; line-height:2.4rem; font-size:1.2rem; width: 100%; min-width:70px;
 -webkit-transition-duration:0.4s;transition-duration:0.4s;cursor:pointer;}
 #cameraName { line-height:2.4rem; font-size:1.2rem; width:180px; }
 button:hover{background:#0b73aa;}
@@ -283,6 +283,11 @@ label.sl { vertical-align: bottom; }
 #admin { display: none; }
 #picture { display: none; }
 #size { display: none; }
+@media (max-width: 600px) { 
+button, #cameraName, #date, #pagehead { font-size: 0.75rem; line-height: 1.6rem; }
+input[type=checkbox] { height:0.75rem; width: 0.75rem;}
+.cb { border-radius: 0.25rem; line-height:1.6rem; font-size:0.75rem;}
+}
         </style>
 	</head>
 	<body onload="loaded()">

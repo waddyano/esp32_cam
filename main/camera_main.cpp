@@ -10,7 +10,7 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "esp_system.h"
-#include "esp_spi_flash.h"
+#include "spi_flash_mmap.h"
 #include "esp_camera.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
@@ -299,13 +299,16 @@ static esp_err_t index_handler(httpd_req_t *req)
 static void server_close_fn(httpd_handle_t hd, int sockfd)
 {
     ESP_LOGI(TAG, "client closed %d", sockfd);
+    sse_remove_sink(sockfd);
+    ESP_LOGI(TAG, "sink removed %d", sockfd);
     int err = close(sockfd);
     ESP_LOGI(TAG, "close stat %d", err);
-    sse_remove_sink(sockfd);
 }
 
 static httpd_handle_t start_webserver(void)
 {
+    //esp_log_level_set("lwip", ESP_LOG_DEBUG);  
+    esp_log_level_set("httpd", ESP_LOG_DEBUG);  
     //esp_log_level_set("httpd_parse", ESP_LOG_DEBUG);  
     sse_init();
     
@@ -392,6 +395,7 @@ extern "C" void app_main(void)
     set_led(true);
     status_print_info(printf);
 
+    ESP_LOGI(TAG, "init flash");
     esp_err_t err =  nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         // 1.OTA app partition table has a smaller NVS partition size than the non-OTA
@@ -401,6 +405,7 @@ extern "C" void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();
     }
+    ESP_LOGI(TAG, "inited flash");
 
     ESP_ERROR_CHECK(err);
 
@@ -565,6 +570,10 @@ static esp_err_t still_handler(httpd_req_t *req)
                 {
                     res = send_jpeg_as_exif(req->handle, httpd_req_to_sockfd(req), (const char *)fb->buf, fb->len);
                 }
+                else
+                {
+                    ESP_LOGI(TAG, "jpeg header send status %d", res);
+                }
             }
             else
             {
@@ -582,7 +591,7 @@ static esp_err_t still_handler(httpd_req_t *req)
 
     esp_camera_fb_return(fb);
     int64_t fr_end = esp_timer_get_time();
-    ESP_LOGI(TAG, "JPG: %ub %lums", fb_len, (uint32_t)((fr_end - fr_start)/1000));
+    ESP_LOGI(TAG, "JPG: %ub %lums - res %d", fb_len, (uint32_t)((fr_end - fr_start)/1000), res);
     return res;
 }
 
@@ -616,7 +625,7 @@ static void send_next_frame(void *data)
 {
     async_frame_resp *afr = static_cast<async_frame_resp *>(data);
     int64_t grab_start = esp_timer_get_time();
-    ESP_LOGI(TAG, "@%lld: stream next frame: %d", grab_start / 1000, afr->fd);
+    ESP_LOGI(TAG, "@%lld: stream next frame: %d on %d", grab_start / 1000, afr->fd, xPortGetCoreID());
 
     camera_fb_t * fb = esp_camera_fb_get();
     if (fb == nullptr)
@@ -647,6 +656,8 @@ static void send_next_frame(void *data)
         jpg_buf_len = fb->len;
         jpg_buf = fb->buf;
     }
+
+    ESP_LOGI(TAG, "frame length: %zd", jpg_buf_len);
 
     int64_t send_start = esp_timer_get_time();
 
@@ -706,7 +717,8 @@ static void send_next_frame(void *data)
     afr->last_frame_time = fr_end;
     frame_time /= 1000;
     ESP_LOGI(TAG, "MJPG: fd %d: %luKB %lums (%.1ffps)", afr->fd, (uint32_t)(jpg_buf_len/1024), (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
-    httpd_queue_work(afr->hd, send_next_frame, afr);
+    res = httpd_queue_work(afr->hd, send_next_frame, afr);
+    ESP_LOGI(TAG, "Queue work err %d", (int)res);
 }
 
 static esp_err_t stream_handler(httpd_req_t *req)
@@ -721,6 +733,9 @@ static esp_err_t stream_handler(httpd_req_t *req)
         free(afr);
         return ESP_FAIL;
     }
+
+    int one = 1;
+    setsockopt(afr->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
     const char *httpd_hdr_str = "HTTP/1.1 200 ok\r\nContent-Type: " _STREAM_CONTENT_TYPE "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
     auto res = send_all(afr, httpd_hdr_str, strlen(httpd_hdr_str));
